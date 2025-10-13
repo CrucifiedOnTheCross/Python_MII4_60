@@ -30,3 +30,64 @@ def create_phase_image(phase_data, colormap, inverse=False):
     color_image = colormap[indices]
     
     return color_image
+
+
+def create_interferogram(images, method='average'):
+    """
+    Создает интерферограмму из набора изображений
+    
+    Args:
+        images: список numpy arrays с изображениями
+        method: метод создания ('average', 'first', 'last')
+        
+    Returns:
+        numpy array с интерферограммой
+    """
+    if not images or len(images) == 0:
+        return None
+        
+    if method == 'average':
+        # Усредняем все изображения
+        interferogram = np.mean(images, axis=0)
+    elif method == 'first':
+        # Используем первое изображение
+        interferogram = images[0]
+    elif method == 'last':
+        # Используем последнее изображение
+        interferogram = images[-1]
+    else:
+        # По умолчанию - усреднение
+        interferogram = np.mean(images, axis=0)
+    
+    return interferogram.astype(np.uint8)
+
+def save_data_to_csv(data, filepath):
+    """
+    Сохраняет 2D массив данных в CSV файл
+    
+    Args:
+        data: 2D numpy array с данными
+        filepath: путь к файлу для сохранения
+    """
+    import csv
+    from datetime import datetime
+    
+    try:
+        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Записываем заголовок с метаданными
+            writer.writerow([f"# Phase Data Export"])
+            writer.writerow([f"# Timestamp: {datetime.now().isoformat()}"])
+            writer.writerow([f"# Dimensions: {data.shape[1]}x{data.shape[0]}"])
+            writer.writerow([])  # Пустая строка
+            
+            # Записываем данные
+            for row in data:
+                writer.writerow(row.tolist())
+                
+        return True
+        
+    except Exception as e:
+        print(f"Ошибка сохранения CSV: {e}")
+        return False

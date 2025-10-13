@@ -59,3 +59,76 @@ class PhaseProcessor:
             final_data[:, c] = data_no_trend_rows[:, c] - trend
             
         return final_data
+
+    def remove_polynomial_trend(self, phase_data):
+        """
+        Удаляет полиномиальный тренд из фазовых данных (аналог sphereTrend из Java версии)
+        
+        Args:
+            phase_data: 2D numpy array с фазовыми данными
+            
+        Returns:
+            2D numpy array с удаленным полиномиальным трендом
+        """
+        if phase_data is None or phase_data.size == 0:
+            return phase_data
+            
+        height, width = phase_data.shape
+        result = phase_data.copy()
+        
+        # Извлекаем горизонтальный и вертикальный профили
+        horizontal_profile = result[0, :]  # Первая строка
+        vertical_profile = result[:, 0]    # Первый столбец
+        
+        # Вычисляем полиномиальные тренды
+        horizontal_trend = self._fit_polynomial_trend(horizontal_profile, width)
+        vertical_trend = self._fit_polynomial_trend(vertical_profile, height)
+        
+        # Удаляем горизонтальный тренд
+        for y in range(height):
+            result[y, :] -= horizontal_trend
+            
+        # Удаляем вертикальный тренд
+        for x in range(width):
+            result[:, x] -= vertical_trend
+            
+        return result
+    
+    def _fit_polynomial_trend(self, profile, size):
+        """
+        Вычисляет полиномиальный тренд второго порядка для одномерного профиля
+        
+        Args:
+            profile: 1D numpy array
+            size: размер профиля
+            
+        Returns:
+            1D numpy array с полиномиальным трендом
+        """
+        # Создаем матрицу A для полинома второго порядка: y = w1 + w2*x + w3*x^2
+        A = np.zeros((size, 3))
+        for i in range(size):
+            A[i, 0] = 1      # константа
+            A[i, 1] = i      # линейный член
+            A[i, 2] = i * i  # квадратичный член
+        
+        # Решаем систему методом наименьших квадратов: A^T * A * w = A^T * y
+        AT = A.T
+        ATA = np.dot(AT, A)
+        
+        try:
+            # Вычисляем обратную матрицу
+            ATA_inv = np.linalg.inv(ATA)
+            ATy = np.dot(AT, profile)
+            coefficients = np.dot(ATA_inv, ATy)
+            
+            # Вычисляем полиномиальный тренд
+            trend = np.zeros(size)
+            for i in range(size):
+                trend[i] = coefficients[0] + coefficients[1] * i + coefficients[2] * i * i
+                
+            return trend
+            
+        except np.linalg.LinAlgError:
+            # Если матрица вырожденная, возвращаем нулевой тренд
+            return np.zeros(size)
