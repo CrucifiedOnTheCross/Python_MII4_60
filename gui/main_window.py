@@ -4,9 +4,9 @@ import cv2
 import numpy as np
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
-                               QMessageBox, QFileDialog, QGroupBox)
-from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+                               QMessageBox, QFileDialog, QGroupBox, QLineEdit)
+from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 
 from hardware.controller import CameraController, ArduinoController
 from core.phase_processor import PhaseProcessor
@@ -15,6 +15,38 @@ from core.dpi_recorder import DPIRecorder
 from core.visualizer import create_interferogram, save_data_to_csv
 import config
 import time
+
+# Worker для постоянной трансляции видео с камеры
+class CameraStreamWorker(QThread):
+    new_frame = Signal(np.ndarray)
+    error = Signal(str)
+
+    def __init__(self, camera_controller):
+        super().__init__()
+        self.camera_controller = camera_controller
+        self.is_running = False
+
+    def run(self):
+        self.is_running = True
+        while self.is_running:
+            try:
+                if self.camera_controller.is_running:
+                    frame = self.camera_controller.get_frame()
+                    if frame is not None:
+                        # Конвертируем в цветное изображение для отображения
+                        if len(frame.shape) == 2:  # Если серое изображение
+                            frame_color = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                        else:
+                            frame_color = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        self.new_frame.emit(frame_color)
+                self.msleep(33)  # ~30 FPS
+            except Exception as e:
+                self.error.emit(f"Ошибка захвата кадра: {str(e)}")
+                break
+
+    def stop(self):
+        self.is_running = False
+        self.wait()
 
 # Worker для выполнения захвата в отдельном потоке
 class MeasurementWorker(QThread):
@@ -51,7 +83,7 @@ class MeasurementWorker(QThread):
             
             if len(images) == self.params['steps']:
                 # Вычисляем фазу
-                phase_data = self.processor.compute_phase(images)
+                phase_data = self.processor.compute_phase(images, self.params['steps'])
                 
                 # Применяем развертку фазы, если включена
                 if self.params.get('unwrap', False):
@@ -65,8 +97,7 @@ class MeasurementWorker(QThread):
                 phase_image = create_phase_image(
                     phase_data, 
                     self.colormap, 
-                    inverse=self.params.get('inverse', False),
-                    rainbow=self.params.get('rainbow', False)
+                    inverse=self.params.get('inverse', False)
                 )
                 
                 self.new_image.emit(phase_image)
@@ -101,6 +132,9 @@ class MainWindow(QMainWindow):
         
         # Worker для измерений
         self.worker = None
+        
+        # Worker для постоянной трансляции видео
+        self.camera_stream_worker = None
         
         self._init_ui()
         self._populate_devices()
@@ -137,10 +171,10 @@ class MainWindow(QMainWindow):
         
         # Длина волны
         self.controls_layout.addWidget(QLabel("Длина волны (нм):"))
-        self.lambda_combo = QComboBox()
-        self.lambda_combo.addItems(["632.8", "543.5", "488.0"])
-        self.lambda_combo.setCurrentText("632.8")
-        self.controls_layout.addWidget(self.lambda_combo)
+        self.lambda_input = QLineEdit()
+        self.lambda_input.setText("632.8")
+        self.lambda_input.setValidator(QDoubleValidator(400.0, 800.0, 1))  # Ограничиваем диапазон видимого света
+        self.controls_layout.addWidget(self.lambda_input)
         
         # Задержка
         self.controls_layout.addWidget(QLabel("Задержка (мс):"))
@@ -173,6 +207,11 @@ class MainWindow(QMainWindow):
         self.start_button.clicked.connect(self.toggle_measurement)
         self.controls_layout.addWidget(self.start_button)
         
+        # Кнопка для включения/выключения трансляции камеры
+        self.stream_button = QPushButton("Включить трансляцию")
+        self.stream_button.clicked.connect(self.toggle_camera_stream)
+        self.controls_layout.addWidget(self.stream_button)
+        
         self.save_button = QPushButton("Сохранить изображение")
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
@@ -182,10 +221,11 @@ class MainWindow(QMainWindow):
         
         # Правая панель - отображение изображения
         self.image_label = QLabel()
-        self.image_label.setMinimumSize(640, 480)
+        self.image_label.setFixedSize(640, 480)  # Фиксированный размер для предотвращения изменения
         self.image_label.setStyleSheet("border: 1px solid gray")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setText("Изображение будет отображено здесь")
+        self.image_label.setScaledContents(False)  # Отключаем автоматическое масштабирование
         
         main_layout.addWidget(controls_widget)
         main_layout.addWidget(self.image_label)
@@ -256,15 +296,27 @@ class MainWindow(QMainWindow):
         self.port_combo.addItems(ports)
 
     def on_camera_change(self, text):
-        if text:
+        """Обработчик изменения выбранной камеры."""
+        if text and text != "Нет доступных камер":
             try:
-                camera_id = int(text.split()[-1])
-                if self.camera_ctrl.connect(camera_id):
-                    QMessageBox.information(self, "Успех", f"Камера {camera_id} подключена")
-                else:
-                    QMessageBox.warning(self, "Ошибка", f"Не удалось подключить камеру {camera_id}")
-            except:
-                pass
+                # Останавливаем текущую трансляцию если она активна
+                if self.camera_stream_worker and self.camera_stream_worker.isRunning():
+                    self.stop_camera_stream()
+                
+                # Останавливаем текущую камеру
+                self.camera_ctrl.stop()
+                
+                # Извлекаем индекс камеры из текста
+                camera_index = int(text.split()[-1])
+                self.camera_ctrl.start(camera_index)
+                print(f"Переключились на камеру {camera_index}")
+                
+                # Автоматически запускаем трансляцию если камера успешно подключена
+                if self.camera_ctrl.is_running:
+                    self.start_camera_stream()
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось подключиться к камере: {e}")
 
     def on_port_change(self, text):
         if text and text != "Нет доступных портов":
@@ -283,13 +335,13 @@ class MainWindow(QMainWindow):
             self.stop_measurement()
 
     def start_measurement(self):
-        if not self.camera_ctrl.is_connected:
+        if not self.camera_ctrl.is_running:
             QMessageBox.warning(self, "Предупреждение", "Камера не подключена")
             return
         
         params = {
             'steps': int(self.steps_combo.currentText()),
-            'lambda': float(self.lambda_combo.currentText()),
+            'lambda': float(self.lambda_input.text()),
             'delay': self.delay_slider.value(),
             'unwrap': self.unwrap_checkbox.isChecked(),
             'remove_trend': self.trend_checkbox.isChecked(),
@@ -416,10 +468,74 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка", "Не удалось сохранить данные")
 
     def closeEvent(self, event):
+        """Обработчик закрытия окна."""
+        # Останавливаем все активные процессы
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait()
         
+        if self.camera_stream_worker and self.camera_stream_worker.isRunning():
+            self.camera_stream_worker.stop()
+            
+        if self.dpi_recorder.is_recording:
+            self.dpi_recorder.stop_recording()
+            
+        # Отключаем контроллеры
         self.camera_ctrl.stop()
         self.arduino_ctrl.disconnect()
+        
         event.accept()
+    
+    def toggle_camera_stream(self):
+        """Переключает состояние трансляции камеры."""
+        if self.camera_stream_worker and self.camera_stream_worker.isRunning():
+            self.stop_camera_stream()
+        else:
+            self.start_camera_stream()
+    
+    def start_camera_stream(self):
+        """Запускает трансляцию видео с камеры."""
+        if not self.camera_ctrl.is_running:
+            QMessageBox.warning(self, "Ошибка", "Сначала выберите и подключите камеру")
+            return
+            
+        try:
+            self.camera_stream_worker = CameraStreamWorker(self.camera_ctrl)
+            self.camera_stream_worker.new_frame.connect(self.update_camera_frame)
+            self.camera_stream_worker.error.connect(self.on_camera_stream_error)
+            self.camera_stream_worker.start()
+            
+            self.stream_button.setText("Остановить трансляцию")
+            print("Трансляция камеры запущена")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось запустить трансляцию: {e}")
+    
+    def stop_camera_stream(self):
+        """Останавливает трансляцию видео с камеры."""
+        if self.camera_stream_worker and self.camera_stream_worker.isRunning():
+            self.camera_stream_worker.stop()
+            self.stream_button.setText("Включить трансляцию")
+            print("Трансляция камеры остановлена")
+    
+    @Slot(np.ndarray)
+    def update_camera_frame(self, frame):
+        """Обновляет отображение кадра с камеры."""
+        try:
+            height, width, channel = frame.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_image)
+            
+            # Масштабируем изображение для отображения
+            scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.image_label.setPixmap(scaled_pixmap)
+            
+        except Exception as e:
+            print(f"Ошибка обновления кадра: {e}")
+    
+    @Slot(str)
+    def on_camera_stream_error(self, error_msg):
+        """Обработчик ошибок трансляции камеры."""
+        QMessageBox.critical(self, "Ошибка трансляции", error_msg)
+        self.stop_camera_stream()
