@@ -5,8 +5,9 @@ import numpy as np
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
                                QMessageBox, QFileDialog, QGroupBox, QLineEdit,
-                               QGraphicsView, QGraphicsScene, QGraphicsPixmapItem)
-from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator
+                               QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
+                               QSizePolicy, QFrame)
+from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator, QFont
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 
 from hardware.controller import CameraController, ArduinoController
@@ -254,26 +255,37 @@ class MainWindow(QMainWindow):
         
         self.controls_layout.addStretch()
         
-        right_layout = QVBoxLayout()
-        
+        right_layout = QHBoxLayout()
+        right_layout.setSpacing(0)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
         self.phase_view = GraphicsImageView()
-        self.phase_view.setFixedSize(640, 360)
-        self.phase_title = QLabel("Фазовое изображение")
-        self.phase_title.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.phase_title)
-        right_layout.addWidget(self.phase_view)
+        self.phase_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.phase_view.setToolTip("Фазовое изображение")
+        phase_box = QVBoxLayout()
+        phase_box.setContentsMargins(0, 0, 0, 0)
+        phase_box.setSpacing(0)
+        phase_box.addWidget(self.phase_view)
+        phase_widget = QWidget()
+        phase_widget.setLayout(phase_box)
 
         self.interferogram_view = GraphicsImageView()
-        self.interferogram_view.setFixedSize(640, 360)
-        self.interferogram_title = QLabel("Интерферограмма")
-        self.interferogram_title.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.interferogram_title)
-        right_layout.addWidget(self.interferogram_view)
+        self.interferogram_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.interferogram_view.setToolTip("Интерферограмма")
+        interfer_box = QVBoxLayout()
+        interfer_box.setContentsMargins(0, 0, 0, 0)
+        interfer_box.setSpacing(0)
+        interfer_box.addWidget(self.interferogram_view)
+        interfer_widget = QWidget()
+        interfer_widget.setLayout(interfer_box)
+
+        right_layout.addWidget(phase_widget, 1)
+        right_layout.addWidget(interfer_widget, 1)
 
         container = QWidget()
         container.setLayout(right_layout)
         main_layout.addWidget(controls_widget)
-        main_layout.addWidget(container)
+        main_layout.addWidget(container, 1)
 
     def setup_advanced_controls(self):
         """Настройка дополнительных элементов управления"""
@@ -448,7 +460,7 @@ class MainWindow(QMainWindow):
         height, width, channel = cv_img.shape
         bytes_per_line = 3 * width
         q_image = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        self.phase_view.set_image(q_image)
+        self.phase_view.set_image(q_image, preserve_transform=True)
         self.save_button.setEnabled(True)
 
     @Slot(np.ndarray)
@@ -456,7 +468,7 @@ class MainWindow(QMainWindow):
         height, width, channel = frame.shape
         bytes_per_line = 3 * width
         q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        self.interferogram_view.set_image(q_image)
+        self.interferogram_view.set_image(q_image, preserve_transform=True)
         self.save_interfer_button.setEnabled(True)
 
     @Slot(np.ndarray)
@@ -692,16 +704,19 @@ class GraphicsImageView(QGraphicsView):
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setAlignment(Qt.AlignCenter)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def set_image(self, qimage: QImage, preserve_transform: bool = False):
         pixmap = QPixmap.fromImage(qimage)
         is_first = self._pix_item.pixmap().isNull()
         self._pix_item.setPixmap(pixmap)
-        if preserve_transform:
-            if is_first:
-                self.fitInView(self._pix_item, Qt.KeepAspectRatio)
-        else:
-            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+        if preserve_transform and self._zoom != 0:
+            return
+        self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+        if not preserve_transform:
             self._zoom = 0
 
     def wheelEvent(self, event):
@@ -711,3 +726,8 @@ class GraphicsImageView(QGraphicsView):
         factor = 1.25 if angle > 0 else 0.8
         self.scale(factor, factor)
         self._zoom += 1 if angle > 0 else -1
+    
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._pix_item.pixmap().isNull() and self._zoom == 0:
+            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
