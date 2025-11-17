@@ -79,7 +79,13 @@ class ArduinoController:
     def list_ports():
         """Возвращает список доступных COM-портов."""
         ports = serial.tools.list_ports.comports()
-        return [port.device for port in ports] if ports else ["Нет портов"]
+        if not ports:
+            return ["Нет доступных портов"]
+        items = []
+        for p in ports:
+            desc = p.description if hasattr(p, 'description') else ''
+            items.append(f"{p.device} {desc}".strip())
+        return items
 
     def connect(self, port, baudrate=None):
         """Подключается к Arduino."""
@@ -96,6 +102,7 @@ class ArduinoController:
             # Инициализируем пины как в Java версии
             self._initialize_pins()
             print(f"Подключено к {port} на скорости {baudrate}")
+            return True
         except serial.SerialException as e:
             raise IOError(f"Не удалось подключиться к {port}: {e}")
 

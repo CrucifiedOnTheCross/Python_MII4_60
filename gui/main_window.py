@@ -4,7 +4,8 @@ import cv2
 import numpy as np
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
-                               QMessageBox, QFileDialog, QGroupBox, QLineEdit)
+                               QMessageBox, QFileDialog, QGroupBox, QLineEdit,
+                               QGraphicsView, QGraphicsScene, QGraphicsPixmapItem)
 from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 
@@ -50,7 +51,9 @@ class CameraStreamWorker(QThread):
 
 # Worker для выполнения захвата в отдельном потоке
 class MeasurementWorker(QThread):
-    new_image = Signal(np.ndarray)
+    new_phase_image = Signal(np.ndarray)
+    new_interferogram = Signal(np.ndarray)
+    phase_data_ready = Signal(np.ndarray)
     finished = Signal()
     error = Signal(str)
 
@@ -82,25 +85,36 @@ class MeasurementWorker(QThread):
                 images.append(frame)
             
             if len(images) == self.params['steps']:
-                # Вычисляем фазу
-                phase_data = self.processor.compute_phase(images, self.params['steps'])
-                
-                # Применяем развертку фазы, если включена
+                phase_wrapped = self.processor.compute_phase(images, self.params['steps'])
+                use_scale = self.params.get('scale', True)
+                threshold = self.params.get('threshold', 0.8)
                 if self.params.get('unwrap', False):
-                    phase_data = self.processor.unwrap_phase(phase_data)
-                
-                # Удаляем тренд, если включено
+                    if use_scale:
+                        height_map = self.processor.scale_phase(phase_wrapped)
+                        height_map = self.processor.threshold_unwrap(height_map, threshold=threshold, iterations=2, horizontal=True, vertical=True)
+                        phase_data = height_map
+                    else:
+                        unwrapped = self.processor.unwrap_phase(phase_wrapped)
+                        phase_data = unwrapped
+                else:
+                    phase_data = self.processor.scale_phase(phase_wrapped) if use_scale else phase_wrapped
                 if self.params.get('remove_trend', False):
                     phase_data = self.processor.remove_linear_trend(phase_data)
-                
-                # Создаем изображение
                 phase_image = create_phase_image(
-                    phase_data, 
-                    self.colormap, 
+                    phase_data,
+                    self.colormap,
                     inverse=self.params.get('inverse', False)
                 )
-                
-                self.new_image.emit(phase_image)
+                self.phase_data_ready.emit(phase_data)
+                self.new_phase_image.emit(phase_image)
+
+                interferogram = create_interferogram(images, 'average')
+                if interferogram is not None:
+                    if len(interferogram.shape) == 2:
+                        interferogram = cv2.cvtColor(interferogram, cv2.COLOR_GRAY2RGB)
+                    else:
+                        interferogram = cv2.cvtColor(interferogram, cv2.COLOR_BGR2RGB)
+                    self.new_interferogram.emit(interferogram)
             
             self.finished.emit()
         except Exception as e:
@@ -161,6 +175,10 @@ class MainWindow(QMainWindow):
         self.port_combo = QComboBox()
         self.port_combo.currentTextChanged.connect(self.on_port_change)
         self.controls_layout.addWidget(self.port_combo)
+
+        refresh_btn = QPushButton("Обновить устройства")
+        refresh_btn.clicked.connect(self._populate_devices)
+        self.controls_layout.addWidget(refresh_btn)
         
         # Количество шагов
         self.controls_layout.addWidget(QLabel("Количество шагов:"))
@@ -199,6 +217,10 @@ class MainWindow(QMainWindow):
         self.rainbow_checkbox = QCheckBox("Радужная палитра")
         self.controls_layout.addWidget(self.rainbow_checkbox)
         
+        self.scale_checkbox = QCheckBox("Масштаб λ/2π")
+        self.scale_checkbox.setChecked(True)
+        self.controls_layout.addWidget(self.scale_checkbox)
+        
         # Добавляем расширенные элементы управления
         self.setup_advanced_controls()
         
@@ -216,19 +238,42 @@ class MainWindow(QMainWindow):
         self.save_button.clicked.connect(self.save_image)
         self.save_button.setEnabled(False)
         self.controls_layout.addWidget(self.save_button)
+
+        self.save_interfer_button = QPushButton("Сохранить интерферограмму")
+        self.save_interfer_button.clicked.connect(self.save_interferogram_image)
+        self.save_interfer_button.setEnabled(False)
+        self.controls_layout.addWidget(self.save_interfer_button)
+
+        self.save_settings_button = QPushButton("Сохранить настройки")
+        self.save_settings_button.clicked.connect(self.save_settings)
+        self.controls_layout.addWidget(self.save_settings_button)
+
+        self.load_settings_button = QPushButton("Загрузить настройки")
+        self.load_settings_button.clicked.connect(self.load_settings)
+        self.controls_layout.addWidget(self.load_settings_button)
         
         self.controls_layout.addStretch()
         
-        # Правая панель - отображение изображения
-        self.image_label = QLabel()
-        self.image_label.setFixedSize(640, 480)  # Фиксированный размер для предотвращения изменения
-        self.image_label.setStyleSheet("border: 1px solid gray")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setText("Изображение будет отображено здесь")
-        self.image_label.setScaledContents(False)  # Отключаем автоматическое масштабирование
+        right_layout = QVBoxLayout()
         
+        self.phase_view = GraphicsImageView()
+        self.phase_view.setFixedSize(640, 360)
+        self.phase_title = QLabel("Фазовое изображение")
+        self.phase_title.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self.phase_title)
+        right_layout.addWidget(self.phase_view)
+
+        self.interferogram_view = GraphicsImageView()
+        self.interferogram_view.setFixedSize(640, 360)
+        self.interferogram_title = QLabel("Интерферограмма")
+        self.interferogram_title.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self.interferogram_title)
+        right_layout.addWidget(self.interferogram_view)
+
+        container = QWidget()
+        container.setLayout(right_layout)
         main_layout.addWidget(controls_widget)
-        main_layout.addWidget(self.image_label)
+        main_layout.addWidget(container)
 
     def setup_advanced_controls(self):
         """Настройка дополнительных элементов управления"""
@@ -283,6 +328,18 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(interferogram_group)
         self.controls_layout.addWidget(export_group)
 
+        threshold_group = QGroupBox("Порог развёртки")
+        threshold_layout = QVBoxLayout()
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(0, 100)
+        self.threshold_slider.setValue(80)
+        self.threshold_label = QLabel("0.80")
+        self.threshold_slider.valueChanged.connect(lambda v: self.threshold_label.setText(f"{v/100:.2f}"))
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(self.threshold_label)
+        threshold_group.setLayout(threshold_layout)
+        self.controls_layout.addWidget(threshold_group)
+
     def _populate_devices(self):
         """Заполняет списки доступных устройств."""
         # Заполняем список камер
@@ -321,7 +378,9 @@ class MainWindow(QMainWindow):
     def on_port_change(self, text):
         if text and text != "Нет доступных портов":
             try:
-                if self.arduino_ctrl.connect(text):
+                device = text.split()[0]
+                ok = self.arduino_ctrl.connect(device)
+                if ok:
                     QMessageBox.information(self, "Успех", f"Arduino подключен к {text}")
                 else:
                     QMessageBox.warning(self, "Ошибка", f"Не удалось подключить Arduino к {text}")
@@ -346,11 +405,15 @@ class MainWindow(QMainWindow):
             'unwrap': self.unwrap_checkbox.isChecked(),
             'remove_trend': self.trend_checkbox.isChecked(),
             'inverse': self.inverse_checkbox.isChecked(),
-            'rainbow': self.rainbow_checkbox.isChecked()
+            'rainbow': self.rainbow_checkbox.isChecked(),
+            'threshold': self.threshold_slider.value() / 100.0,
+            'scale': self.scale_checkbox.isChecked()
         }
         
         self.worker = MeasurementWorker(self.camera_ctrl, self.arduino_ctrl, params)
-        self.worker.new_image.connect(self.update_image)
+        self.worker.new_phase_image.connect(self.update_phase_image)
+        self.worker.phase_data_ready.connect(self.on_phase_data_ready)
+        self.worker.new_interferogram.connect(self.update_interferogram_image)
         self.worker.finished.connect(self.on_measurement_finished)
         self.worker.error.connect(self.on_measurement_error)
         self.worker.start()
@@ -364,7 +427,7 @@ class MainWindow(QMainWindow):
         self.start_button.setText("Начать измерение")
 
     @Slot(np.ndarray)
-    def update_image(self, cv_img):
+    def update_phase_image(self, cv_img):
         # Применяем полиномиальное удаление тренда если включено
         if hasattr(self, 'polynomial_trend_checkbox') and self.polynomial_trend_checkbox.isChecked():
             # Получаем фазовые данные из изображения (это упрощение)
@@ -375,23 +438,30 @@ class MainWindow(QMainWindow):
         self.export_csv_button.setEnabled(True)
         
         # Если включена DPI запись, сохраняем данные
-        if self.dpi_recorder.is_recording:
-            # Конвертируем numpy array в QImage для сохранения
+        if self.dpi_recorder.is_recording and self.current_phase_data is not None:
             height, width, channel = cv_img.shape
             bytes_per_line = 3 * width
             q_image = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-            self.dpi_recorder.save_phase_data(cv_img, q_image)
+            self.dpi_recorder.save_phase_data(self.current_phase_data, q_image)
         
         # Отображаем изображение
         height, width, channel = cv_img.shape
         bytes_per_line = 3 * width
         q_image = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        pixmap = QPixmap.fromImage(q_image)
-        
-        # Масштабируем изображение для отображения
-        scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.image_label.setPixmap(scaled_pixmap)
+        self.phase_view.set_image(q_image)
         self.save_button.setEnabled(True)
+
+    @Slot(np.ndarray)
+    def update_interferogram_image(self, frame):
+        height, width, channel = frame.shape
+        bytes_per_line = 3 * width
+        q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.interferogram_view.set_image(q_image)
+        self.save_interfer_button.setEnabled(True)
+
+    @Slot(np.ndarray)
+    def on_phase_data_ready(self, phase_data):
+        self.current_phase_data = phase_data
 
     def on_measurement_finished(self):
         self.start_button.setText("Начать измерение")
@@ -401,14 +471,89 @@ class MainWindow(QMainWindow):
         self.start_button.setText("Начать измерение")
 
     def save_image(self):
-        if self.image_label.pixmap():
+        if self.phase_view._pix_item.pixmap() and not self.phase_view._pix_item.pixmap().isNull():
             filename, _ = QFileDialog.getSaveFileName(
                 self, "Сохранить изображение", "phase_image.png", 
                 "PNG файлы (*.png);;JPEG файлы (*.jpg)"
             )
             if filename:
-                self.image_label.pixmap().save(filename)
+                self.phase_view._pix_item.pixmap().save(filename)
                 QMessageBox.information(self, "Успех", f"Изображение сохранено: {filename}")
+
+    def save_interferogram_image(self):
+        if self.interferogram_view._pix_item.pixmap() and not self.interferogram_view._pix_item.pixmap().isNull():
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить интерферограмму", "interferogram.png", 
+                "PNG файлы (*.png);;JPEG файлы (*.jpg)"
+            )
+            if filename:
+                self.interferogram_view._pix_item.pixmap().save(filename)
+                QMessageBox.information(self, "Успех", f"Интерферограмма сохранена: {filename}")
+
+    def save_settings(self):
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить настройки", "settings.txt", "Текстовые файлы (*.txt)"
+        )
+        if filename:
+            try:
+                settings = [
+                    str(self.camera_combo.currentIndex()),
+                    str(self.steps_combo.currentIndex()),
+                    str(self.lambda_input.text()),
+                    str(self.inverse_checkbox.isChecked()),
+                    str(self.rainbow_checkbox.isChecked()),
+                    str(self.trend_checkbox.isChecked()),
+                    str(self.delay_slider.value()),
+                    f"{self.threshold_slider.value() / 100.0}",
+                    str(self.unwrap_checkbox.isChecked()),
+                    self.port_combo.currentText()
+                ]
+                with open(filename, 'w', encoding='utf-8') as f:
+                    for s in settings:
+                        f.write(s + "\n")
+                QMessageBox.information(self, "Успех", f"Настройки сохранены: {filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить: {str(e)}")
+
+    def load_settings(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Загрузить настройки", "", "Текстовые файлы (*.txt)"
+        )
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    lines = [line.strip() for line in f.readlines() if line.strip() != ""]
+                cam_idx = int(lines[0]) if len(lines) > 0 else 0
+                steps_idx = int(lines[1]) if len(lines) > 1 else 1
+                self.camera_combo.setCurrentIndex(min(cam_idx, self.camera_combo.count()-1))
+                self.steps_combo.setCurrentIndex(min(steps_idx, self.steps_combo.count()-1))
+                if len(lines) > 2:
+                    self.lambda_input.setText(lines[2])
+                if len(lines) > 3:
+                    self.inverse_checkbox.setChecked(lines[3].lower() == 'true')
+                if len(lines) > 4:
+                    self.rainbow_checkbox.setChecked(lines[4].lower() == 'true')
+                if len(lines) > 5:
+                    self.trend_checkbox.setChecked(lines[5].lower() == 'true')
+                if len(lines) > 6:
+                    self.delay_slider.setValue(int(float(lines[6])))
+                if len(lines) > 7:
+                    val = float(lines[7])
+                    self.threshold_slider.setValue(int(val * 100))
+                    self.threshold_label.setText(f"{val:.2f}")
+                if len(lines) > 8:
+                    self.unwrap_checkbox.setChecked(lines[8].lower() == 'true')
+                if len(lines) > 9:
+                    port_text = lines[9]
+                    idx = self.port_combo.findText(port_text)
+                    if idx != -1:
+                        self.port_combo.setCurrentIndex(idx)
+                    else:
+                        self.port_combo.addItem(port_text)
+                        self.port_combo.setCurrentIndex(self.port_combo.count()-1)
+                QMessageBox.information(self, "Успех", f"Настройки загружены: {filename}")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить: {str(e)}")
 
     def toggle_dpi_recording(self):
         """Переключение DPI записи"""
@@ -525,11 +670,7 @@ class MainWindow(QMainWindow):
             height, width, channel = frame.shape
             bytes_per_line = 3 * width
             q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_image)
-            
-            # Масштабируем изображение для отображения
-            scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.image_label.setPixmap(scaled_pixmap)
+            self.interferogram_view.set_image(q_image, preserve_transform=True)
             
         except Exception as e:
             print(f"Ошибка обновления кадра: {e}")
@@ -539,3 +680,34 @@ class MainWindow(QMainWindow):
         """Обработчик ошибок трансляции камеры."""
         QMessageBox.critical(self, "Ошибка трансляции", error_msg)
         self.stop_camera_stream()
+
+class GraphicsImageView(QGraphicsView):
+    def __init__(self):
+        super().__init__()
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self._pix_item = QGraphicsPixmapItem()
+        self._scene.addItem(self._pix_item)
+        self._zoom = 0
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+
+    def set_image(self, qimage: QImage, preserve_transform: bool = False):
+        pixmap = QPixmap.fromImage(qimage)
+        is_first = self._pix_item.pixmap().isNull()
+        self._pix_item.setPixmap(pixmap)
+        if preserve_transform:
+            if is_first:
+                self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+        else:
+            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self._zoom = 0
+
+    def wheelEvent(self, event):
+        if self._pix_item.pixmap().isNull():
+            return
+        angle = event.angleDelta().y()
+        factor = 1.25 if angle > 0 else 0.8
+        self.scale(factor, factor)
+        self._zoom += 1 if angle > 0 else -1

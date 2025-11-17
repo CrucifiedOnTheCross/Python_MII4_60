@@ -38,6 +38,43 @@ class PhaseProcessor:
         # Используем готовую, быструю функцию из scikit-image
         return unwrap_phase(wrapped_phase)
 
+    def scale_phase(self, phase_radians):
+        return phase_radians * (self.lambda_nm / (2 * np.pi))
+
+    def threshold_unwrap(self, height_map, threshold=0.8, iterations=1, horizontal=True, vertical=True):
+        if height_map is None:
+            return None
+        h = height_map.copy()
+        lam = self.lambda_nm
+        for _ in range(max(1, iterations)):
+            if horizontal:
+                rows, cols = h.shape
+                for y in range(rows):
+                    lastJ = h[y, 0]
+                    dh = 0.0
+                    for x in range(1, cols):
+                        J = h[y, x]
+                        if J - lastJ > 0.5 * lam * threshold:
+                            dh -= 0.5 * lam
+                        elif J - lastJ < -0.5 * lam * threshold:
+                            dh += 0.5 * lam
+                        h[y, x] = J + dh
+                        lastJ = J
+            if vertical:
+                rows, cols = h.shape
+                for x in range(cols):
+                    lastJ = h[0, x]
+                    dh = 0.0
+                    for y in range(1, rows):
+                        J = h[y, x]
+                        if J - lastJ > 0.5 * lam * threshold:
+                            dh -= 0.5 * lam
+                        elif J - lastJ < -0.5 * lam * threshold:
+                            dh += 0.5 * lam
+                        h[y, x] = J + dh
+                        lastJ = J
+        return h
+
     def remove_linear_trend(self, phase_data):
         """Удаляет линейный тренд (наклон) с изображения."""
         rows, cols = phase_data.shape
