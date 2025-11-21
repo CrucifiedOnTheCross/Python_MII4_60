@@ -2,7 +2,7 @@
 
 # Ключевые параметры алгоритма
 DEFAULT_STEPS = 3
-DEFAULT_LAMBDA = 632.8  # Длина волны в нм (Java использует 6328, но в нм это 632.8)
+DEFAULT_LAMBDA = 750  # Длина волны в нм (Java использует 6328, но в нм это 632.8)
 DEFAULT_THRESHOLD = 0.8
 DEFAULT_DELAY = 300     # Задержка в мс
 

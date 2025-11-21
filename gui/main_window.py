@@ -6,13 +6,13 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
                                QMessageBox, QFileDialog, QGroupBox, QLineEdit,
                                QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-                               QSizePolicy, QFrame)
+                               QSizePolicy, QFrame, QScrollArea, QDialog)
 from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator, QFont
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 
 from hardware.controller import CameraController, ArduinoController
 from core.phase_processor import PhaseProcessor
-from core.visualizer import load_colormap, create_phase_image
+from core.visualizer import load_colormap, create_phase_image_gray
 from core.dpi_recorder import DPIRecorder
 from core.visualizer import create_interferogram, save_data_to_csv
 import config
@@ -55,6 +55,7 @@ class MeasurementWorker(QThread):
     new_phase_image = Signal(np.ndarray)
     new_interferogram = Signal(np.ndarray)
     phase_data_ready = Signal(np.ndarray)
+    new_step_image = Signal(np.ndarray)
     finished = Signal()
     error = Signal(str)
 
@@ -84,6 +85,7 @@ class MeasurementWorker(QThread):
                 if frame is None:
                     raise Exception("Не удалось получить кадр с камеры.")
                 images.append(frame)
+                self.new_step_image.emit(frame)
             
             if len(images) == self.params['steps']:
                 phase_wrapped = self.processor.compute_phase(images, self.params['steps'])
@@ -101,9 +103,8 @@ class MeasurementWorker(QThread):
                     phase_data = self.processor.scale_phase(phase_wrapped) if use_scale else phase_wrapped
                 if self.params.get('remove_trend', False):
                     phase_data = self.processor.remove_linear_trend(phase_data)
-                phase_image = create_phase_image(
+                phase_image = create_phase_image_gray(
                     phase_data,
-                    self.colormap,
                     inverse=self.params.get('inverse', False)
                 )
                 self.phase_data_ready.emit(phase_data)
@@ -153,6 +154,7 @@ class MainWindow(QMainWindow):
         
         self._init_ui()
         self._populate_devices()
+        self.last_phase_qimage = None
 
     def _init_ui(self):
         central_widget = QWidget()
@@ -162,7 +164,7 @@ class MainWindow(QMainWindow):
         
         # Левая панель - элементы управления
         controls_widget = QWidget()
-        controls_widget.setMaximumWidth(300)
+        controls_widget.setMaximumWidth(360)
         self.controls_layout = QVBoxLayout(controls_widget)
         
         # Выбор камеры
@@ -254,20 +256,16 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(self.load_settings_button)
         
         self.controls_layout.addStretch()
+
+        self.phase_view_small = GraphicsImageView()
+        self.phase_view_small.setToolTip("Фаза (ч/б)")
+        self.phase_view_small.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.phase_view_small.setFixedHeight(220)
+        self.controls_layout.addWidget(self.phase_view_small)
         
         right_layout = QHBoxLayout()
         right_layout.setSpacing(0)
         right_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.phase_view = GraphicsImageView()
-        self.phase_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.phase_view.setToolTip("Фазовое изображение")
-        phase_box = QVBoxLayout()
-        phase_box.setContentsMargins(0, 0, 0, 0)
-        phase_box.setSpacing(0)
-        phase_box.addWidget(self.phase_view)
-        phase_widget = QWidget()
-        phase_widget.setLayout(phase_box)
 
         self.interferogram_view = GraphicsImageView()
         self.interferogram_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -279,7 +277,20 @@ class MainWindow(QMainWindow):
         interfer_widget = QWidget()
         interfer_widget.setLayout(interfer_box)
 
-        right_layout.addWidget(phase_widget, 1)
+        # Полоска миниатюр шагов под изображением камеры
+        self.thumb_scroll = QScrollArea()
+        self.thumb_scroll.setWidgetResizable(True)
+        self.thumb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.thumb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.thumb_scroll.setFixedHeight(110)
+        self.thumb_container = QWidget()
+        self.thumb_layout = QHBoxLayout(self.thumb_container)
+        self.thumb_layout.setContentsMargins(4, 4, 4, 4)
+        self.thumb_layout.setSpacing(6)
+        self.thumb_scroll.setWidget(self.thumb_container)
+
+        interfer_box.addWidget(self.thumb_scroll)
+
         right_layout.addWidget(interfer_widget, 1)
 
         container = QWidget()
@@ -426,11 +437,20 @@ class MainWindow(QMainWindow):
         self.worker.new_phase_image.connect(self.update_phase_image)
         self.worker.phase_data_ready.connect(self.on_phase_data_ready)
         self.worker.new_interferogram.connect(self.update_interferogram_image)
+        self.worker.new_step_image.connect(self.add_step_thumbnail)
         self.worker.finished.connect(self.on_measurement_finished)
         self.worker.error.connect(self.on_measurement_error)
         self.worker.start()
         
         self.start_button.setText("Остановить измерение")
+
+        # Очистка полоски миниатюр перед новой серией
+        self.expected_steps = params['steps']
+        while self.thumb_layout.count():
+            item = self.thumb_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
     def stop_measurement(self):
         if self.worker:
@@ -449,25 +469,35 @@ class MainWindow(QMainWindow):
         # Сохраняем текущие данные для экспорта
         self.export_csv_button.setEnabled(True)
         
-        # Если включена DPI запись, сохраняем данные
         if self.dpi_recorder.is_recording and self.current_phase_data is not None:
-            height, width, channel = cv_img.shape
-            bytes_per_line = 3 * width
-            q_image = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-            self.dpi_recorder.save_phase_data(self.current_phase_data, q_image)
+            if len(cv_img.shape) == 2:
+                h, w = cv_img.shape
+                qimg_save = QImage(cv_img.data, w, h, w, QImage.Format_Grayscale8)
+            else:
+                h, w, c = cv_img.shape
+                qimg_save = QImage(cv_img.data, w, h, 3 * w, QImage.Format_RGB888).rgbSwapped()
+            self.dpi_recorder.save_phase_data(self.current_phase_data, qimg_save)
         
         # Отображаем изображение
-        height, width, channel = cv_img.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(cv_img.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        self.phase_view.set_image(q_image, preserve_transform=True)
+        if len(cv_img.shape) == 2:
+            h, w = cv_img.shape
+            q_image = QImage(cv_img.data, w, h, w, QImage.Format_Grayscale8)
+        else:
+            h, w, c = cv_img.shape
+            q_image = QImage(cv_img.data, w, h, 3 * w, QImage.Format_RGB888).rgbSwapped()
+        self.last_phase_qimage = q_image
+        self.add_gallery_item(q_image, "Фаза")
         self.save_button.setEnabled(True)
 
     @Slot(np.ndarray)
     def update_interferogram_image(self, frame):
-        height, width, channel = frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        if len(frame.shape) == 2:
+            height, width = frame.shape
+            q_image = QImage(frame.data, width, height, width, QImage.Format_Grayscale8)
+        else:
+            height, width, channel = frame.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
         self.interferogram_view.set_image(q_image, preserve_transform=True)
         self.save_interfer_button.setEnabled(True)
 
@@ -483,13 +513,13 @@ class MainWindow(QMainWindow):
         self.start_button.setText("Начать измерение")
 
     def save_image(self):
-        if self.phase_view._pix_item.pixmap() and not self.phase_view._pix_item.pixmap().isNull():
+        if self.last_phase_qimage is not None:
             filename, _ = QFileDialog.getSaveFileName(
                 self, "Сохранить изображение", "phase_image.png", 
                 "PNG файлы (*.png);;JPEG файлы (*.jpg)"
             )
             if filename:
-                self.phase_view._pix_item.pixmap().save(filename)
+                QPixmap.fromImage(self.last_phase_qimage).save(filename)
                 QMessageBox.information(self, "Успех", f"Изображение сохранено: {filename}")
 
     def save_interferogram_image(self):
@@ -501,6 +531,38 @@ class MainWindow(QMainWindow):
             if filename:
                 self.interferogram_view._pix_item.pixmap().save(filename)
                 QMessageBox.information(self, "Успех", f"Интерферограмма сохранена: {filename}")
+
+    def add_step_thumbnail(self, frame):
+        if frame is None:
+            return
+        # Ограничиваем количество миниатюр числом шагов
+        if hasattr(self, 'expected_steps') and self.thumb_layout.count() >= self.expected_steps:
+            return
+        if len(frame.shape) == 2:
+            h, w = frame.shape
+            qimg = QImage(frame.data, w, h, w, QImage.Format_Grayscale8)
+        else:
+            h, w, c = frame.shape
+            qimg = QImage(frame.data, w, h, 3 * w, QImage.Format_RGB888)
+        index = self.thumb_layout.count() + 1
+        item = ClickableThumb(qimg, f"Шаг {index}")
+        item.clicked.connect(lambda qi, cap=f"Шаг {index}": self.open_image_in_viewer(qi, cap))
+        self.thumb_layout.addWidget(item)
+
+    def add_gallery_item(self, qimg, caption):
+        item = ClickableThumb(qimg, caption)
+        item.clicked.connect(lambda qi, cap=caption: self.open_image_in_viewer(qi, cap))
+        self.thumb_layout.addWidget(item)
+
+    def open_image_in_viewer(self, qimg, title):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        lay = QVBoxLayout(dlg)
+        view = GraphicsImageView()
+        lay.addWidget(view)
+        view.set_image(qimg, preserve_transform=False)
+        dlg.showMaximized()
+        dlg.exec()
 
     def save_settings(self):
         filename, _ = QFileDialog.getSaveFileName(
@@ -731,3 +793,22 @@ class GraphicsImageView(QGraphicsView):
         super().resizeEvent(event)
         if not self._pix_item.pixmap().isNull() and self._zoom == 0:
             self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+
+class ClickableThumb(QWidget):
+    clicked = Signal(QImage)
+    def __init__(self, qimg: QImage, caption: str):
+        super().__init__()
+        self.qimage = qimg
+        self.label_img = QLabel()
+        pix = QPixmap.fromImage(qimg).scaledToHeight(90, Qt.SmoothTransformation)
+        self.label_img.setPixmap(pix)
+        self.label_img.setAlignment(Qt.AlignCenter)
+        self.label_txt = QLabel(caption)
+        self.label_txt.setAlignment(Qt.AlignCenter)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        lay.addWidget(self.label_img)
+        lay.addWidget(self.label_txt)
+    def mousePressEvent(self, e):
+        self.clicked.emit(self.qimage)

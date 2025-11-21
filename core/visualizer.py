@@ -14,22 +14,25 @@ def load_colormap(filepath):
 
 
 def create_phase_image(phase_data, colormap, inverse=False):
-    """Преобразует 2D массив фазы в цветное изображение."""
     min_val, max_val = np.min(phase_data), np.max(phase_data)
     if max_val == min_val:
         return np.zeros((*phase_data.shape, 3), dtype=np.uint8)
-
     if inverse:
         min_val, max_val = max_val, min_val
-        
-    # Нормализуем данные в диапазон индексов палитры
     indices = (phase_data - min_val) / (max_val - min_val) * (len(colormap) - 1)
     indices = np.round(indices).astype(int)
-    
-    # Создаем цветное изображение используя палитру как lookup table
     color_image = colormap[indices]
-    
     return color_image
+
+def create_phase_image_gray(phase_data, inverse=False):
+    min_val, max_val = np.min(phase_data), np.max(phase_data)
+    if max_val == min_val:
+        return np.zeros(phase_data.shape, dtype=np.uint8)
+    if inverse:
+        min_val, max_val = max_val, min_val
+    img = (phase_data - min_val) / (max_val - min_val)
+    img = (img * 255.0).clip(0, 255).astype(np.uint8)
+    return img
 
 
 def create_interferogram(images, method='average'):
