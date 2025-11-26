@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
 
 from hardware.controller import CameraController, ArduinoController
 from core.phase_processor import PhaseProcessor
-from core.visualizer import load_colormap, create_phase_image_gray
+from core.visualizer import load_colormap, create_phase_image_gray, create_phase_image
 from core.dpi_recorder import DPIRecorder
 from core.visualizer import create_interferogram, save_data_to_csv
 import config
@@ -94,7 +94,10 @@ class MeasurementWorker(QThread):
                 if self.params.get('unwrap', False):
                     if use_scale:
                         height_map = self.processor.scale_phase(phase_wrapped)
-                        height_map = self.processor.threshold_unwrap(height_map, threshold=threshold, iterations=2, horizontal=True, vertical=True)
+                        if self.params.get('tile_unwrap', False):
+                            height_map = self.processor.tile_unwrap(height_map, delimeter=self.params.get('tile_size', 32), threshold=threshold, horizontal=True, vertical=True, use_special=True)
+                        else:
+                            height_map = self.processor.threshold_unwrap(height_map, threshold=threshold, iterations=2, horizontal=True, vertical=True)
                         phase_data = height_map
                     else:
                         unwrapped = self.processor.unwrap_phase(phase_wrapped)
@@ -103,10 +106,17 @@ class MeasurementWorker(QThread):
                     phase_data = self.processor.scale_phase(phase_wrapped) if use_scale else phase_wrapped
                 if self.params.get('remove_trend', False):
                     phase_data = self.processor.remove_linear_trend(phase_data)
-                phase_image = create_phase_image_gray(
-                    phase_data,
-                    inverse=self.params.get('inverse', False)
-                )
+                if self.params.get('rainbow', False):
+                    phase_image = create_phase_image(
+                        phase_data,
+                        self.colormap,
+                        inverse=self.params.get('inverse', False)
+                    )
+                else:
+                    phase_image = create_phase_image_gray(
+                        phase_data,
+                        inverse=self.params.get('inverse', False)
+                    )
                 self.phase_data_ready.emit(phase_data)
                 self.new_phase_image.emit(phase_image)
 
@@ -165,6 +175,7 @@ class MainWindow(QMainWindow):
         # Левая панель - элементы управления
         controls_widget = QWidget()
         controls_widget.setMaximumWidth(360)
+        controls_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.controls_layout = QVBoxLayout(controls_widget)
         
         # Выбор камеры
@@ -172,12 +183,17 @@ class MainWindow(QMainWindow):
         self.camera_combo = QComboBox()
         self.camera_combo.currentTextChanged.connect(self.on_camera_change)
         self.controls_layout.addWidget(self.camera_combo)
+
         
         # Выбор порта Arduino
         self.controls_layout.addWidget(QLabel("Arduino порт:"))
         self.port_combo = QComboBox()
         self.port_combo.currentTextChanged.connect(self.on_port_change)
         self.controls_layout.addWidget(self.port_combo)
+
+        self.test_arduino_button = QPushButton("Тест Arduino")
+        self.test_arduino_button.clicked.connect(self.test_arduino)
+        self.controls_layout.addWidget(self.test_arduino_button)
 
         refresh_btn = QPushButton("Обновить устройства")
         refresh_btn.clicked.connect(self._populate_devices)
@@ -295,7 +311,12 @@ class MainWindow(QMainWindow):
 
         container = QWidget()
         container.setLayout(right_layout)
-        main_layout.addWidget(controls_widget)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setWidget(controls_widget)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        main_layout.addWidget(controls_scroll)
         main_layout.addWidget(container, 1)
 
     def setup_advanced_controls(self):
@@ -313,6 +334,8 @@ class MainWindow(QMainWindow):
         
         # Группа для DPI записи
         dpi_group = QGroupBox("DPI Запись")
+        dpi_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        dpi_group.setMinimumHeight(110)
         dpi_layout = QVBoxLayout()
         
         self.dpi_record_button = QPushButton("Начать DPI запись")
@@ -363,6 +386,22 @@ class MainWindow(QMainWindow):
         threshold_group.setLayout(threshold_layout)
         self.controls_layout.addWidget(threshold_group)
 
+        tile_group = QGroupBox("Плиточная развёртка")
+        tile_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        tile_group.setMinimumHeight(140)
+        tile_layout = QVBoxLayout()
+        self.tile_unwrap_checkbox = QCheckBox("Включить плиточную развёртку")
+        tile_layout.addWidget(self.tile_unwrap_checkbox)
+        self.tile_size_slider = QSlider(Qt.Horizontal)
+        self.tile_size_slider.setRange(8, 128)
+        self.tile_size_slider.setValue(32)
+        self.tile_size_label = QLabel("32")
+        self.tile_size_slider.valueChanged.connect(lambda v: self.tile_size_label.setText(str(v)))
+        tile_layout.addWidget(self.tile_size_slider)
+        tile_layout.addWidget(self.tile_size_label)
+        tile_group.setLayout(tile_layout)
+        self.controls_layout.addWidget(tile_group)
+
     def _populate_devices(self):
         """Заполняет списки доступных устройств."""
         # Заполняем список камер
@@ -410,6 +449,24 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Ошибка подключения: {str(e)}")
 
+    def test_arduino(self):
+        text = self.port_combo.currentText()
+        if not text or text == "Нет доступных портов":
+            QMessageBox.warning(self, "Предупреждение", "Нет доступного порта Arduino")
+            return
+        try:
+            device = text.split()[0]
+            if not self.arduino_ctrl.is_connected:
+                ok = self.arduino_ctrl.connect(device)
+                if not ok:
+                    QMessageBox.warning(self, "Ошибка", f"Не удалось подключиться к {text}")
+                    return
+            self.arduino_ctrl.send_step_command(0)
+            self.arduino_ctrl.reset_all_pins()
+            QMessageBox.information(self, "Успех", "Команда отправлена на Arduino")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Тест не выполнен: {str(e)}")
+
     def toggle_measurement(self):
         if self.worker is None or not self.worker.isRunning():
             self.start_measurement()
@@ -430,7 +487,9 @@ class MainWindow(QMainWindow):
             'inverse': self.inverse_checkbox.isChecked(),
             'rainbow': self.rainbow_checkbox.isChecked(),
             'threshold': self.threshold_slider.value() / 100.0,
-            'scale': self.scale_checkbox.isChecked()
+            'scale': self.scale_checkbox.isChecked(),
+            'tile_unwrap': hasattr(self, 'tile_unwrap_checkbox') and self.tile_unwrap_checkbox.isChecked(),
+            'tile_size': self.tile_size_slider.value()
         }
         
         self.worker = MeasurementWorker(self.camera_ctrl, self.arduino_ctrl, params)

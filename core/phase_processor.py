@@ -75,6 +75,66 @@ class PhaseProcessor:
                         lastJ = J
         return h
 
+    def phase_jump(self, tile, threshold=0.8):
+        lam = self.lambda_nm
+        img = tile
+        j = False
+        h, w = img.shape
+        for y in range(h):
+            for x in range(1, w):
+                if (img[y, x] - img[y, x - 1] > 0.5 * lam * threshold) or (img[y, x] - img[y, x - 1] < -0.5 * lam * threshold):
+                    j = True
+        for x in range(w):
+            for y in range(1, h):
+                if (img[y, x] - img[y - 1, x] > 0.5 * lam * threshold) or (img[y, x] - img[y - 1, x] < -0.5 * lam * threshold):
+                    j = True
+        return j
+
+    def special_unwrap(self, p, tiles_mask, delimeter, threshold=0.8):
+        lam = self.lambda_nm
+        ResY, ResX = p.shape
+        for i in range(3):
+            for y in range(ResY):
+                lastJ = p[y, 0]
+                dh = 0.0
+                for x in range(1, ResX):
+                    J = p[y, x]
+                    if not tiles_mask[x // delimeter, y // delimeter]:
+                        if J - lastJ > 0.5 * lam * threshold:
+                            dh -= 0.5 * lam
+                        elif J - lastJ < -0.5 * lam * threshold:
+                            dh += 0.5 * lam
+                        lastJ = J
+                    p[y, x] = J + dh
+            for x in range(ResX):
+                lastJ = p[0, x]
+                dh = 0.0
+                for y in range(1, ResY):
+                    J = p[y, x]
+                    if not tiles_mask[x // delimeter, y // delimeter]:
+                        if J - lastJ > 0.5 * lam * threshold:
+                            dh -= 0.5 * lam
+                        elif J - lastJ < -0.5 * lam * threshold:
+                            dh += 0.5 * lam
+                        lastJ = J
+                    p[y, x] = J + dh
+        return p
+
+    def tile_unwrap(self, height_map, delimeter=32, threshold=0.8, horizontal=True, vertical=True, use_special=True):
+        img = height_map
+        h, w = img.shape
+        b = np.zeros_like(img)
+        tiles_mask = np.zeros((max(1, w // delimeter), max(1, h // delimeter)), dtype=bool)
+        for Y in range(0, h, delimeter):
+            for X in range(0, w, delimeter):
+                tile = img[Y:Y + delimeter, X:X + delimeter]
+                unwrapped_tile = self.threshold_unwrap(tile, threshold=threshold, iterations=1, horizontal=horizontal, vertical=vertical)
+                tiles_mask[X // delimeter, Y // delimeter] = self.phase_jump(unwrapped_tile, threshold=threshold)
+                b[Y:Y + delimeter, X:X + delimeter] = unwrapped_tile
+        if use_special:
+            b = self.special_unwrap(b, tiles_mask, delimeter, threshold=threshold)
+        return b
+
     def remove_linear_trend(self, phase_data):
         """Удаляет линейный тренд (наклон) с изображения."""
         rows, cols = phase_data.shape
