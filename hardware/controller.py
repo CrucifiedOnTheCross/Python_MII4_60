@@ -115,20 +115,30 @@ class ArduinoController:
                 self._initialize_pins()
                 print(f"Подключено по Firmata к {port}")
                 return True
+            except PermissionError as e:
+                print(f"Доступ к порту отклонён: {e}")
+                time.sleep(1.5)
             except Exception as e:
                 print(f"Не удалось подключиться по Firmata: {e}. Пытаемся через serial...")
         
         # Фолбэк: простой serial с текстовым протоколом
-        try:
-            self.ser = serial.Serial(port, baudrate, timeout=1)
-            self._mode = 'serial'
-            self.is_connected = True
-            time.sleep(2)
-            self._initialize_pins()
-            print(f"Подключено по serial к {port} на скорости {baudrate}")
-            return True
-        except serial.SerialException as e:
-            raise IOError(f"Не удалось подключиться к {port}: {e}")
+        last_err = None
+        for br in [baudrate, 115200, 9600]:
+            try:
+                self.ser = serial.Serial(port, br, timeout=1, rtscts=False, dsrdtr=True, write_timeout=1)
+                self._mode = 'serial'
+                self.is_connected = True
+                time.sleep(2)
+                self._initialize_pins()
+                print(f"Подключено по serial к {port} на скорости {br}")
+                return True
+            except PermissionError as e:
+                last_err = e
+                print(f"Доступ к порту отклонён: {e}")
+                time.sleep(1.5)
+            except serial.SerialException as e:
+                last_err = e
+        raise IOError(f"Не удалось подключиться к {port}: {last_err}")
 
     def disconnect(self):
         """Отключается от Arduino."""
