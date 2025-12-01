@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         
         # Worker для постоянной трансляции видео
         self.camera_stream_worker = None
+        self.main_view_mode = 'camera'
         
         self._init_ui()
         self._populate_devices()
@@ -195,8 +196,12 @@ class MainWindow(QMainWindow):
         self.test_arduino_button.clicked.connect(self.test_arduino)
         self.controls_layout.addWidget(self.test_arduino_button)
 
+        self.blink_button = QPushButton("Мигнуть")
+        self.blink_button.clicked.connect(self.blink_arduino)
+        self.controls_layout.addWidget(self.blink_button)
+
         refresh_btn = QPushButton("Обновить устройства")
-        refresh_btn.clicked.connect(self._populate_devices)
+        refresh_btn.clicked.connect(self._refresh_devices)
         self.controls_layout.addWidget(refresh_btn)
         
         # Количество шагов
@@ -252,6 +257,10 @@ class MainWindow(QMainWindow):
         self.stream_button = QPushButton("Включить трансляцию")
         self.stream_button.clicked.connect(self.toggle_camera_stream)
         self.controls_layout.addWidget(self.stream_button)
+
+        self.toggle_view_button = QPushButton("Показать фазу")
+        self.toggle_view_button.clicked.connect(self.toggle_main_view)
+        self.controls_layout.addWidget(self.toggle_view_button)
         
         self.save_button = QPushButton("Сохранить изображение")
         self.save_button.clicked.connect(self.save_image)
@@ -414,6 +423,16 @@ class MainWindow(QMainWindow):
         self.port_combo.clear()
         self.port_combo.addItems(ports)
 
+    def _refresh_devices(self):
+        """Обновляет список устройств, предварительно освобождая ресурсы Arduino."""
+        try:
+            if self.arduino_ctrl.is_connected:
+                self.arduino_ctrl.disconnect()
+                time.sleep(0.2)
+        except Exception:
+            pass
+        self._populate_devices()
+
     def on_camera_change(self, text):
         """Обработчик изменения выбранной камеры."""
         if text and text != "Нет доступных камер":
@@ -440,14 +459,25 @@ class MainWindow(QMainWindow):
     def on_port_change(self, text):
         if text and text != "Нет доступных портов":
             try:
+                if "Занят" in text:
+                    QMessageBox.warning(self, "Порт занят", "Выбранный COM-порт занят другой программой. Закройте сторонние приложения или выберите свободный порт.")
+                    return
                 device = text.split()[0]
                 ok = self.arduino_ctrl.connect(device)
                 if ok:
                     QMessageBox.information(self, "Успех", f"Arduino подключен к {text}")
                 else:
-                    QMessageBox.warning(self, "Ошибка", f"Не удалось подключить Arduino к {text}")
+                    auto = self.arduino_ctrl.connect_auto()
+                    if auto:
+                        QMessageBox.information(self, "Успех", "Arduino подключен автоматически")
+                    else:
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось подключить Arduino к {text}")
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Ошибка подключения: {str(e)}")
+                auto = self.arduino_ctrl.connect_auto()
+                if auto:
+                    QMessageBox.information(self, "Успех", "Arduino подключен автоматически")
+                else:
+                    QMessageBox.critical(self, "Ошибка", f"Ошибка подключения: {str(e)}")
 
     def test_arduino(self):
         text = self.port_combo.currentText()
@@ -455,17 +485,69 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Нет доступного порта Arduino")
             return
         try:
+            if "Занят" in text:
+                QMessageBox.warning(self, "Порт занят", "Выбранный COM-порт занят другой программой. Закройте сторонние приложения или выберите свободный порт.")
+                return
             device = text.split()[0]
             if not self.arduino_ctrl.is_connected:
                 ok = self.arduino_ctrl.connect(device)
                 if not ok:
-                    QMessageBox.warning(self, "Ошибка", f"Не удалось подключиться к {text}")
-                    return
+                    if not self.arduino_ctrl.connect_auto():
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось подключиться к {text}")
+                        return
             self.arduino_ctrl.send_step_command(0)
             self.arduino_ctrl.reset_all_pins()
             QMessageBox.information(self, "Успех", "Команда отправлена на Arduino")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Тест не выполнен: {str(e)}")
+            if self.arduino_ctrl.connect_auto():
+                self.arduino_ctrl.send_step_command(0)
+                self.arduino_ctrl.reset_all_pins()
+                QMessageBox.information(self, "Успех", "Команда отправлена на Arduino")
+            else:
+                QMessageBox.critical(self, "Ошибка", f"Тест не выполнен: {str(e)}")
+
+    def blink_arduino(self):
+        text = self.port_combo.currentText()
+        if not text or text == "Нет доступных портов":
+            QMessageBox.warning(self, "Предупреждение", "Нет доступного порта Arduino")
+            return
+        try:
+            if "Занят" in text:
+                QMessageBox.warning(self, "Порт занят", "Выбранный COM-порт занят другой программой. Закройте сторонние приложения или выберите свободный порт.")
+                return
+            device = text.split()[0]
+            if not self.arduino_ctrl.is_connected:
+                ok = self.arduino_ctrl.connect(device)
+                if not ok:
+                    if not self.arduino_ctrl.connect_auto():
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось подключиться к {text}")
+                        return
+            period = self.delay_slider.value()
+            success = True
+            for _ in range(5):
+                if not self.arduino_ctrl.blink(duration_ms=period):
+                    success = False
+                    break
+                time.sleep(period / 1000.0)
+            if success:
+                QMessageBox.information(self, "Успех", "Arduino мигнул 5 раз")
+            else:
+                QMessageBox.warning(self, "Предупреждение", "Команда мигания не выполнена")
+        except Exception as e:
+            if self.arduino_ctrl.connect_auto():
+                period = self.delay_slider.value()
+                success = True
+                for _ in range(5):
+                    if not self.arduino_ctrl.blink(duration_ms=period):
+                        success = False
+                        break
+                    time.sleep(period / 1000.0)
+                if success:
+                    QMessageBox.information(self, "Успех", "Arduino мигнул 5 раз")
+                else:
+                    QMessageBox.warning(self, "Предупреждение", "Команда мигания не выполнена")
+            else:
+                QMessageBox.critical(self, "Ошибка", f"Мигание не выполнено: {str(e)}")
 
     def toggle_measurement(self):
         if self.worker is None or not self.worker.isRunning():
@@ -545,6 +627,8 @@ class MainWindow(QMainWindow):
             h, w, c = cv_img.shape
             q_image = QImage(cv_img.data, w, h, 3 * w, QImage.Format_RGB888).rgbSwapped()
         self.last_phase_qimage = q_image
+        if getattr(self, 'main_view_mode', 'camera') == 'phase':
+            self.interferogram_view.set_image(q_image, preserve_transform=True)
         self.add_gallery_item(q_image, "Фаза")
         self.save_button.setEnabled(True)
 
@@ -557,7 +641,8 @@ class MainWindow(QMainWindow):
             height, width, channel = frame.shape
             bytes_per_line = 3 * width
             q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        self.interferogram_view.set_image(q_image, preserve_transform=True)
+        if getattr(self, 'main_view_mode', 'camera') == 'camera':
+            self.interferogram_view.set_image(q_image, preserve_transform=True)
         self.save_interfer_button.setEnabled(True)
 
     @Slot(np.ndarray)
@@ -803,10 +888,23 @@ class MainWindow(QMainWindow):
             height, width, channel = frame.shape
             bytes_per_line = 3 * width
             q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-            self.interferogram_view.set_image(q_image, preserve_transform=True)
+            if getattr(self, 'main_view_mode', 'camera') == 'camera':
+                self.interferogram_view.set_image(q_image, preserve_transform=True)
             
         except Exception as e:
             print(f"Ошибка обновления кадра: {e}")
+
+    def toggle_main_view(self):
+        if self.main_view_mode == 'camera':
+            if self.last_phase_qimage is None:
+                QMessageBox.warning(self, "Предупреждение", "Фазовое изображение ещё не получено")
+                return
+            self.main_view_mode = 'phase'
+            self.toggle_view_button.setText("Показать камеру")
+            self.interferogram_view.set_image(self.last_phase_qimage, preserve_transform=False)
+        else:
+            self.main_view_mode = 'camera'
+            self.toggle_view_button.setText("Показать фазу")
     
     @Slot(str)
     def on_camera_stream_error(self, error_msg):

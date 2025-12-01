@@ -13,6 +13,9 @@ DEFAULT_CAMERA_FPS = 30
 # Настройки Arduino
 DEFAULT_ARDUINO_BAUDRATE = 57600
 ARDUINO_PINS = list(range(2, 11))  # Пины 2-10 для управления
+BLINK_PIN = 13
+ESP_BLINK_PIN = 2
+ESP_LED_INVERTED = True
 
 # Настройки обработки
 DEFAULT_DELIMITER = 10  # Разделитель для специального unwrap

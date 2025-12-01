@@ -3,6 +3,15 @@ import serial
 import serial.tools.list_ports
 import time
 import config
+import inspect
+from collections import namedtuple
+
+if not hasattr(inspect, 'getargspec'):
+    _ArgSpec = namedtuple('ArgSpec', 'args varargs keywords defaults')
+    def _compat_getargspec(func):
+        fs = inspect.getfullargspec(func)
+        return _ArgSpec(fs.args, fs.varargs, fs.varkw, fs.defaults)
+    inspect.getargspec = _compat_getargspec
 try:
     import pyfirmata
     from pyfirmata import util
@@ -85,15 +94,48 @@ class ArduinoController:
 
     @staticmethod
     def list_ports():
-        """Возвращает список доступных COM-портов."""
         ports = serial.tools.list_ports.comports()
         if not ports:
             return ["Нет доступных портов"]
-        items = []
+        result = []
         for p in ports:
+            dev = p.device
             desc = p.description if hasattr(p, 'description') else ''
-            items.append(f"{p.device} {desc}".strip())
-        return items
+            busy = False
+            try:
+                t = serial.Serial(dev, 9600, timeout=0.2)
+                t.close()
+            except Exception:
+                busy = True
+            suffix = " (Занят)" if busy else ""
+            result.append(f"{dev} {desc}{suffix}".strip())
+        return result
+
+    def connect_auto(self, baudrate=None):
+        if baudrate is None:
+            baudrate = config.DEFAULT_ARDUINO_BAUDRATE
+        ports = serial.tools.list_ports.comports()
+        preferred = []
+        fallback = []
+        for p in ports:
+            dev = p.device
+            desc = p.description if hasattr(p, 'description') else ''
+            try:
+                t = serial.Serial(dev, 9600, timeout=0.2)
+                t.close()
+                if any(x in desc for x in ["Arduino", "USB", "CH340", "CDC"]):
+                    preferred.append(dev)
+                else:
+                    fallback.append(dev)
+            except Exception:
+                continue
+        for dev in preferred + fallback:
+            try:
+                if self.connect(dev, baudrate):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def connect(self, port, baudrate=None):
         """Подключается к Arduino. Предпочтительно через Firmata, как в Java-версии."""
@@ -104,31 +146,48 @@ class ArduinoController:
             self.disconnect()
         
         # Пытаемся использовать Firmata, если библиотека доступна
-        if _HAS_FIRMATA:
+        if _HAS_FIRMATA and not self._is_esp_board(port):
+            tmp_board = None
             try:
-                self.board = pyfirmata.Arduino(port)
-                # Запускаем итератор, чтобы не переполнялся буфер
-                util.Iterator(self.board).start()
+                tmp_board = pyfirmata.Arduino(port)
+                util.Iterator(tmp_board).start()
+                time.sleep(2)
+                # Присваиваем только после успешной инициализации
+                self.board = tmp_board
                 self._mode = 'firmata'
                 self.is_connected = True
-                time.sleep(2)
                 self._initialize_pins()
                 print(f"Подключено по Firmata к {port}")
                 return True
             except PermissionError as e:
                 print(f"Доступ к порту отклонён: {e}")
                 time.sleep(1.5)
+                try:
+                    if tmp_board:
+                        tmp_board.exit()
+                except Exception:
+                    pass
             except Exception as e:
+                # Гарантируем освобождение ресурса при частичной инициализации
+                try:
+                    if tmp_board:
+                        tmp_board.exit()
+                except Exception:
+                    pass
                 print(f"Не удалось подключиться по Firmata: {e}. Пытаемся через serial...")
         
         # Фолбэк: простой serial с текстовым протоколом
         last_err = None
+        is_esp = self._is_esp_board(port)
         for br in [baudrate, 115200, 9600]:
+            tmp_ser = None
             try:
-                self.ser = serial.Serial(port, br, timeout=1, rtscts=False, dsrdtr=True, write_timeout=1)
+                tmp_ser = serial.Serial(port, br, timeout=1, rtscts=False, dsrdtr=(False if is_esp else True), write_timeout=1)
+                time.sleep(2)
+                # Присваиваем только после успешной инициализации
+                self.ser = tmp_ser
                 self._mode = 'serial'
                 self.is_connected = True
-                time.sleep(2)
                 self._initialize_pins()
                 print(f"Подключено по serial к {port} на скорости {br}")
                 return True
@@ -136,9 +195,44 @@ class ArduinoController:
                 last_err = e
                 print(f"Доступ к порту отклонён: {e}")
                 time.sleep(1.5)
+                try:
+                    if tmp_ser:
+                        tmp_ser.close()
+                except Exception:
+                    pass
             except serial.SerialException as e:
                 last_err = e
+                try:
+                    if tmp_ser:
+                        tmp_ser.close()
+                except Exception:
+                    pass
+            except Exception as e:
+                last_err = e
+                # Закрываем дескриптор при любых исключениях в процессе инициализации
+                try:
+                    if tmp_ser:
+                        tmp_ser.close()
+                except Exception:
+                    pass
         raise IOError(f"Не удалось подключиться к {port}: {last_err}")
+
+    @staticmethod
+    def _get_port_info(port):
+        for p in serial.tools.list_ports.comports():
+            if p.device == port:
+                return p
+        return None
+
+    def _is_esp_board(self, port):
+        info = self._get_port_info(port)
+        if not info:
+            return False
+        desc = getattr(info, 'description', '') or ''
+        manu = getattr(info, 'manufacturer', '') or ''
+        hwid = getattr(info, 'hwid', '') or ''
+        text = f"{desc} {manu} {hwid}".upper()
+        return ('ESP' in text) or ('NODEMCU' in text) or ('WEMOS' in text)
 
     def disconnect(self):
         """Отключается от Arduino."""
@@ -147,9 +241,12 @@ class ArduinoController:
                 self.board.exit()
             if self.ser:
                 self.ser.close()
+                # Небольшая пауза для корректного освобождения порта на Windows
+                time.sleep(0.2)
         finally:
             self.board = None
             self.ser = None
+            self._mode = None
         self.is_connected = False
         
     def _initialize_pins(self):
@@ -240,3 +337,55 @@ class ArduinoController:
     def get_current_step(self):
         """Возвращает текущий активный шаг."""
         return self.current_step
+
+    def blink(self, pin=None, duration_ms=300):
+        """Коротко включает пин и выключает для проверки связи.
+        По умолчанию мигает встроенным светодиодом на `config.BLINK_PIN`.
+        """
+        if not self.is_connected:
+            print("Arduino не подключен.")
+            return False
+
+        if pin is None:
+            pin = getattr(config, 'BLINK_PIN', 13)
+            # Для ESP используем другой пин по умолчанию
+            try:
+                if self._mode == 'serial' and self.ser:
+                    port = getattr(self.ser, 'port', None)
+                    if port and self._is_esp_board(port):
+                        pin = getattr(config, 'ESP_BLINK_PIN', 2)
+            except Exception:
+                pass
+
+        try:
+            if self._mode == 'firmata' and self.board:
+                self.board.digital[pin].mode = pyfirmata.OUTPUT
+                self.board.digital[pin].write(1)
+                time.sleep(duration_ms / 1000.0)
+                self.board.digital[pin].write(0)
+                return True
+            elif self._mode == 'serial' and self.ser:
+                invert = False
+                try:
+                    port = getattr(self.ser, 'port', None)
+                    if port and self._is_esp_board(port):
+                        invert = getattr(config, 'ESP_LED_INVERTED', True)
+                except Exception:
+                    pass
+                self.ser.write(f"PINMODE:{pin}:OUTPUT\n".encode('utf-8'))
+                time.sleep(0.005)
+                if invert:
+                    self.ser.write(f"DIGITAL:{pin}:LOW\n".encode('utf-8'))
+                    time.sleep(duration_ms / 1000.0)
+                    self.ser.write(f"DIGITAL:{pin}:HIGH\n".encode('utf-8'))
+                else:
+                    self.ser.write(f"DIGITAL:{pin}:HIGH\n".encode('utf-8'))
+                    time.sleep(duration_ms / 1000.0)
+                    self.ser.write(f"DIGITAL:{pin}:LOW\n".encode('utf-8'))
+                return True
+            else:
+                print("Неизвестный режим соединения для мигания")
+                return False
+        except Exception as e:
+            print(f"Ошибка мигания пина {pin}: {e}")
+            return False
