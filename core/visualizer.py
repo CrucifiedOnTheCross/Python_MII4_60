@@ -7,9 +7,27 @@ def load_colormap(filepath):
     """Загружает палитру из CSV файла."""
     hex_colors = np.loadtxt(filepath, dtype=str)
     # Конвертируем HEX в BGR (формат OpenCV)
-    colormap = np.array([int(h[4:6], 16) for h in hex_colors]), \
-               np.array([int(h[2:4], 16) for h in hex_colors]), \
-               np.array([int(h[0:2], 16) for h in hex_colors])
+    # Файл содержит цвета в формате AARRGGBB
+    # Нам нужны каналы B, G, R (игнорируем Alpha)
+    
+    # Проверяем длину первой строки, чтобы определить формат
+    if len(hex_colors) > 0 and len(hex_colors[0]) == 8:
+        # Format: AARRGGBB
+        # Alpha: h[0:2], Red: h[2:4], Green: h[4:6], Blue: h[6:8]
+        colormap = (
+            np.array([int(h[6:8], 16) for h in hex_colors]), # Blue
+            np.array([int(h[4:6], 16) for h in hex_colors]), # Green
+            np.array([int(h[2:4], 16) for h in hex_colors])  # Red
+        )
+    else:
+        # Fallback for RRGGBB (length 6) or incorrect parsing
+        # Assuming RRGGBB: R: 0:2, G: 2:4, B: 4:6
+        colormap = (
+            np.array([int(h[4:6], 16) for h in hex_colors]), # Blue
+            np.array([int(h[2:4], 16) for h in hex_colors]), # Green
+            np.array([int(h[0:2], 16) for h in hex_colors])  # Red
+        )
+        
     return np.stack(colormap, axis=1).astype(np.uint8)
 
 
@@ -77,7 +95,7 @@ def save_data_to_csv(data, filepath):
     
     try:
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
+            writer = csv.writer(csvfile, delimiter=';')
             
             # Записываем заголовок с метаданными
             writer.writerow([f"# Phase Data Export"])

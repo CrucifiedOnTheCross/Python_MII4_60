@@ -109,7 +109,7 @@ class DPIRecorder(QObject):
             csv_path: путь к CSV файлу
         """
         with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
+            writer = csv.writer(csvfile, delimiter=';')
             
             # Записываем заголовок с метаданными
             writer.writerow([f"# DPI Recording - Image {self.image_count}"])

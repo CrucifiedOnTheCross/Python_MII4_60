@@ -191,18 +191,6 @@ class MainWindow(QMainWindow):
         self.port_combo = QComboBox()
         self.port_combo.currentTextChanged.connect(self.on_port_change)
         self.controls_layout.addWidget(self.port_combo)
-
-        self.test_arduino_button = QPushButton("Тест Arduino")
-        self.test_arduino_button.clicked.connect(self.test_arduino)
-        self.controls_layout.addWidget(self.test_arduino_button)
-
-        self.blink_button = QPushButton("Мигнуть")
-        self.blink_button.clicked.connect(self.blink_arduino)
-        self.controls_layout.addWidget(self.blink_button)
-
-        refresh_btn = QPushButton("Обновить устройства")
-        refresh_btn.clicked.connect(self._refresh_devices)
-        self.controls_layout.addWidget(refresh_btn)
         
         # Количество шагов
         self.controls_layout.addWidget(QLabel("Количество шагов:"))
@@ -214,7 +202,7 @@ class MainWindow(QMainWindow):
         # Длина волны
         self.controls_layout.addWidget(QLabel("Длина волны (нм):"))
         self.lambda_input = QLineEdit()
-        self.lambda_input.setText("632.8")
+        self.lambda_input.setText("750")
         self.lambda_input.setValidator(QDoubleValidator(400.0, 800.0, 1))  # Ограничиваем диапазон видимого света
         self.controls_layout.addWidget(self.lambda_input)
         
