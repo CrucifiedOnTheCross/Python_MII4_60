@@ -9,7 +9,10 @@ class PhaseProcessor:
         self.lambda_nm = lambda_nm
 
     def compute_phase(self, images, steps):
-        """Вычисляет 'свёрнутую' фазу на основе серии изображений."""
+        """
+        Вычисляет 'свёрнутую' фазу на основе серии изображений.
+        Формулы соответствуют методическим указаниям (сдвиг 60 градусов).
+        """
         # Убедимся, что изображения в float для вычислений
         images = [img.astype(np.float32) for img in images]
         
@@ -18,18 +21,17 @@ class PhaseProcessor:
         denominator = np.zeros_like(I[0])
 
         if steps == 3:
-            numerator = np.sqrt(3) * (I[2] - I[1])
-            denominator = 2 * I[0] - I[1] - I[2]
+            numerator = 2 * I[0] - 3 * I[1] + I[2]
+            denominator = np.sqrt(3) * (I[1] - I[2])
         elif steps == 4:
-            numerator = I[0] - I[2]
-            denominator = I[3] - I[1]
-        elif steps == 5:
-            numerator = 2 * (I[1] - I[3])
-            denominator = 2 * I[2] - I[0] - I[4]
-        else:
-            raise ValueError("Поддерживаются только 3, 4, или 5 шагов.")
+            numerator = 5 * (I[0] - I[1] - I[2] + I[3])
+            denominator = np.sqrt(3) * (2 * I[0] + I[1] - I[2] - 2 * I[3])
             
-        # Избегаем деления на ноль
+        elif steps == 5:
+            numerator = np.sqrt(3) * (2 * I[0] - 3 * I[1] - 4 * I[2] + 5 * I[4])
+            denominator = 8 * I[0] + 3 * I[1] - 4 * I[2] - 6 * I[3] - I[4]
+        else:
+            raise ValueError("Поддерживаются только 3, 4, или 5 шагов.")     
         wrapped_phase = np.arctan2(numerator, denominator)
         return wrapped_phase
 
