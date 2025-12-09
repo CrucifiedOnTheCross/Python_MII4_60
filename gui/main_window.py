@@ -313,8 +313,8 @@ class MainWindow(QMainWindow):
         controls_scroll.setWidget(controls_widget)
         controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         controls_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        main_layout.addWidget(controls_scroll)
         main_layout.addWidget(container, 1)
+        main_layout.addWidget(controls_scroll)
 
     def setup_advanced_controls(self):
         """Настройка дополнительных элементов управления"""
