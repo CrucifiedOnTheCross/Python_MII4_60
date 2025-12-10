@@ -14,7 +14,7 @@ from hardware.controller import CameraController, ArduinoController
 from core.phase_processor import PhaseProcessor
 from core.visualizer import load_colormap, create_phase_image_gray, create_phase_image
 from core.dpi_recorder import DPIRecorder
-from core.visualizer import create_interferogram, save_data_to_csv
+from core.visualizer import create_interferogram, save_image_as_csv
 import config
 import time
 
@@ -813,10 +813,11 @@ class MainWindow(QMainWindow):
         )
         
         if filename:
-            if save_data_to_csv(self.current_phase_data, filename):
-                QMessageBox.information(self, "Успех", f"Данные сохранены в {filename}")
+            ok, result = save_image_as_csv(self.current_phase_data, filename)
+            if ok:
+                QMessageBox.information(self, "Успех", f"Данные сохранены в {result}")
             else:
-                QMessageBox.critical(self, "Ошибка", "Не удалось сохранить данные")
+                QMessageBox.critical(self, "Ошибка", result)
 
     def closeEvent(self, event):
         """Обработчик закрытия окна."""

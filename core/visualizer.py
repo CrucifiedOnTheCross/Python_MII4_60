@@ -2,6 +2,7 @@
 
 import numpy as np
 import cv2
+import os
 
 def load_colormap(filepath):
     """Загружает палитру из CSV файла."""
@@ -112,3 +113,18 @@ def save_data_to_csv(data, filepath):
     except Exception as e:
         print(f"Ошибка сохранения CSV: {e}")
         return False
+
+def save_image_as_csv(image, save_path):
+    """Сохранить изображение в CSV формате"""
+    try:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        np.savetxt(save_path, image, fmt='%.6f', delimiter=',')
+        if os.path.exists(save_path):
+            print(f"Изображение сохранено в CSV формате: {save_path}")
+            return True, save_path
+        else:
+            return False, "CSV файл не был создан"
+    except Exception as e:
+        error_msg = f"Ошибка при сохранении в CSV формате: {str(e)}"
+        print(error_msg)
+        return False, error_msg
