@@ -70,63 +70,63 @@ class MeasurementWorker(QThread):
 
     def run(self):
         try:
-            images = []
-            for i in range(self.params['steps']):
+            series_count = int(self.params.get('series_count', 64))
+            for _ in range(series_count):
                 if not self.is_running:
                     break
-                
-                # Команда Arduino, если он подключен
-                if self.arduino and self.arduino.is_connected:
-                    self.arduino.send_step_command(i)
-                
-                time.sleep(self.params['delay'] / 1000.0)
-                
-                frame = self.camera.get_frame()
-                if frame is None:
-                    raise Exception("Не удалось получить кадр с камеры.")
-                images.append(frame)
-                self.new_step_image.emit(frame)
-            
-            if len(images) == self.params['steps']:
-                phase_wrapped = self.processor.compute_phase(images, self.params['steps'])
-                use_scale = self.params.get('scale', True)
-                threshold = self.params.get('threshold', 0.8)
-                if self.params.get('unwrap', False):
-                    if use_scale:
-                        height_map = self.processor.scale_phase(phase_wrapped)
-                        if self.params.get('tile_unwrap', False):
-                            height_map = self.processor.tile_unwrap(height_map, delimeter=self.params.get('tile_size', 32), threshold=threshold, horizontal=True, vertical=True, use_special=True)
-                        else:
-                            height_map = self.processor.threshold_unwrap(height_map, threshold=threshold, iterations=2, horizontal=True, vertical=True)
-                        phase_data = height_map
-                    else:
-                        unwrapped = self.processor.unwrap_phase(phase_wrapped)
-                        phase_data = unwrapped
-                else:
-                    phase_data = self.processor.scale_phase(phase_wrapped) if use_scale else phase_wrapped
-                if self.params.get('remove_trend', False):
-                    phase_data = self.processor.remove_linear_trend(phase_data)
-                if self.params.get('rainbow', False):
-                    phase_image = create_phase_image(
-                        phase_data,
-                        self.colormap,
-                        inverse=self.params.get('inverse', False)
-                    )
-                else:
-                    phase_image = create_phase_image_gray(
-                        phase_data,
-                        inverse=self.params.get('inverse', False)
-                    )
-                self.phase_data_ready.emit(phase_data)
-                self.new_phase_image.emit(phase_image)
+                images = []
+                for i in range(self.params['steps']):
+                    if not self.is_running:
+                        break
+                    if self.arduino and self.arduino.is_connected:
+                        self.arduino.send_step_command(i)
+                    time.sleep(self.params['delay'] / 1000.0)
+                    frame = self.camera.get_frame()
+                    if frame is None:
+                        raise Exception("Не удалось получить кадр с камеры.")
+                    images.append(frame)
+                    self.new_step_image.emit(frame)
 
-                interferogram = create_interferogram(images, 'average')
-                if interferogram is not None:
-                    if len(interferogram.shape) == 2:
-                        interferogram = cv2.cvtColor(interferogram, cv2.COLOR_GRAY2RGB)
+                if len(images) == self.params['steps']:
+                    phase_wrapped = self.processor.compute_phase(images, self.params['steps'])
+                    use_scale = self.params.get('scale', True)
+                    threshold = self.params.get('threshold', 0.8)
+                    if self.params.get('unwrap', False):
+                        if use_scale:
+                            height_map = self.processor.scale_phase(phase_wrapped)
+                            if self.params.get('tile_unwrap', False):
+                                height_map = self.processor.tile_unwrap(height_map, delimeter=self.params.get('tile_size', 32), threshold=threshold, horizontal=True, vertical=True, use_special=True)
+                            else:
+                                height_map = self.processor.threshold_unwrap(height_map, threshold=threshold, iterations=2, horizontal=True, vertical=True)
+                            phase_data = height_map
+                        else:
+                            unwrapped = self.processor.unwrap_phase(phase_wrapped)
+                            phase_data = unwrapped
                     else:
-                        interferogram = cv2.cvtColor(interferogram, cv2.COLOR_BGR2RGB)
-                    self.new_interferogram.emit(interferogram)
+                        phase_data = self.processor.scale_phase(phase_wrapped) if use_scale else phase_wrapped
+                    if self.params.get('remove_trend', False):
+                        phase_data = self.processor.remove_linear_trend(phase_data)
+                    if self.params.get('rainbow', False):
+                        phase_image = create_phase_image(
+                            phase_data,
+                            self.colormap,
+                            inverse=self.params.get('inverse', False)
+                        )
+                    else:
+                        phase_image = create_phase_image_gray(
+                            phase_data,
+                            inverse=self.params.get('inverse', False)
+                        )
+                    self.phase_data_ready.emit(phase_data)
+                    self.new_phase_image.emit(phase_image)
+
+                    interferogram = create_interferogram(images, 'average')
+                    if interferogram is not None:
+                        if len(interferogram.shape) == 2:
+                            interferogram = cv2.cvtColor(interferogram, cv2.COLOR_GRAY2RGB)
+                        else:
+                            interferogram = cv2.cvtColor(interferogram, cv2.COLOR_BGR2RGB)
+                        self.new_interferogram.emit(interferogram)
             
             self.finished.emit()
         except Exception as e:
@@ -210,8 +210,8 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(QLabel("Задержка (мс):"))
         self.delay_slider = QSlider(Qt.Horizontal)
         self.delay_slider.setRange(10, 1000)
-        self.delay_slider.setValue(100)
-        self.delay_label = QLabel("100")
+        self.delay_slider.setValue(200)
+        self.delay_label = QLabel("200")
         self.delay_slider.valueChanged.connect(lambda v: self.delay_label.setText(str(v)))
         self.controls_layout.addWidget(self.delay_slider)
         self.controls_layout.addWidget(self.delay_label)
@@ -249,16 +249,7 @@ class MainWindow(QMainWindow):
         self.toggle_view_button = QPushButton("Показать фазу")
         self.toggle_view_button.clicked.connect(self.toggle_main_view)
         self.controls_layout.addWidget(self.toggle_view_button)
-        
-        self.save_button = QPushButton("Сохранить изображение")
-        self.save_button.clicked.connect(self.save_image)
-        self.save_button.setEnabled(False)
-        self.controls_layout.addWidget(self.save_button)
 
-        self.save_interfer_button = QPushButton("Сохранить интерферограмму")
-        self.save_interfer_button.clicked.connect(self.save_interferogram_image)
-        self.save_interfer_button.setEnabled(False)
-        self.controls_layout.addWidget(self.save_interfer_button)
 
         self.save_settings_button = QPushButton("Сохранить настройки")
         self.save_settings_button.clicked.connect(self.save_settings)
@@ -358,7 +349,7 @@ class MainWindow(QMainWindow):
         export_group = QGroupBox("Экспорт данных")
         export_layout = QVBoxLayout()
         
-        self.export_csv_button = QPushButton("Экспорт в CSV")
+        self.export_csv_button = QPushButton("Сохранить фазовое изображение")
         self.export_csv_button.clicked.connect(self.export_phase_data_csv)
         self.export_csv_button.setEnabled(False)
         export_layout.addWidget(self.export_csv_button)
@@ -559,7 +550,8 @@ class MainWindow(QMainWindow):
             'threshold': self.threshold_slider.value() / 100.0,
             'scale': self.scale_checkbox.isChecked(),
             'tile_unwrap': hasattr(self, 'tile_unwrap_checkbox') and self.tile_unwrap_checkbox.isChecked(),
-            'tile_size': self.tile_size_slider.value()
+            'tile_size': self.tile_size_slider.value(),
+            'series_count': 64
         }
         
         self.worker = MeasurementWorker(self.camera_ctrl, self.arduino_ctrl, params)
@@ -618,7 +610,7 @@ class MainWindow(QMainWindow):
         if getattr(self, 'main_view_mode', 'camera') == 'phase':
             self.interferogram_view.set_image(q_image, preserve_transform=True)
         self.add_gallery_item(q_image, "Фаза")
-        self.save_button.setEnabled(True)
+        
 
     @Slot(np.ndarray)
     def update_interferogram_image(self, frame):
@@ -631,7 +623,7 @@ class MainWindow(QMainWindow):
             q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
         if getattr(self, 'main_view_mode', 'camera') == 'camera':
             self.interferogram_view.set_image(q_image, preserve_transform=True)
-        self.save_interfer_button.setEnabled(True)
+        
 
     @Slot(np.ndarray)
     def on_phase_data_ready(self, phase_data):

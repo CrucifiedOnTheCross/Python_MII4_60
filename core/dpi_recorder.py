@@ -108,18 +108,11 @@ class DPIRecorder(QObject):
             phase_data: 2D numpy array с фазовыми данными
             csv_path: путь к CSV файлу
         """
-        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile, delimiter=';')
-            
-            # Записываем заголовок с метаданными
-            writer.writerow([f"# DPI Recording - Image {self.image_count}"])
-            writer.writerow([f"# Timestamp: {datetime.now().isoformat()}"])
-            writer.writerow([f"# Dimensions: {phase_data.shape[1]}x{phase_data.shape[0]}"])
-            writer.writerow([])  # Пустая строка
-            
-            # Записываем данные
-            for row in phase_data:
-                writer.writerow(row.tolist())
+        try:
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            np.savetxt(csv_path, phase_data, fmt='%.6f', delimiter=',')
+        except Exception as e:
+            self.error_occurred.emit(f"Ошибка сохранения CSV: {str(e)}")
     
     def get_recording_info(self):
         """
