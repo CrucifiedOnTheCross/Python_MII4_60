@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
-                               QMessageBox, QFileDialog, QGroupBox, QLineEdit,
+                               QMessageBox, QFileDialog, QGroupBox, QLineEdit, QSpinBox,
                                QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSizePolicy, QFrame, QScrollArea, QDialog)
 from PySide6.QtGui import QPixmap, QImage, QIntValidator, QDoubleValidator, QFont
@@ -216,6 +216,13 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(self.delay_slider)
         self.controls_layout.addWidget(self.delay_label)
         
+        # Количество фаз (серий)
+        self.controls_layout.addWidget(QLabel("Количество фаз:"))
+        self.series_spin = QSpinBox()
+        self.series_spin.setRange(1, 1000)
+        self.series_spin.setValue(64)
+        self.controls_layout.addWidget(self.series_spin)
+        
         # Чекбоксы
         self.unwrap_checkbox = QCheckBox("Развертка фазы")
         self.controls_layout.addWidget(self.unwrap_checkbox)
@@ -281,19 +288,7 @@ class MainWindow(QMainWindow):
         interfer_widget = QWidget()
         interfer_widget.setLayout(interfer_box)
 
-        # Полоска миниатюр шагов под изображением камеры
-        self.thumb_scroll = QScrollArea()
-        self.thumb_scroll.setWidgetResizable(True)
-        self.thumb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.thumb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.thumb_scroll.setFixedHeight(110)
-        self.thumb_container = QWidget()
-        self.thumb_layout = QHBoxLayout(self.thumb_container)
-        self.thumb_layout.setContentsMargins(4, 4, 4, 4)
-        self.thumb_layout.setSpacing(6)
-        self.thumb_scroll.setWidget(self.thumb_container)
-
-        interfer_box.addWidget(self.thumb_scroll)
+        # Нижняя полоска миниатюр удалена
 
         right_layout.addWidget(interfer_widget, 1)
 
@@ -551,27 +546,21 @@ class MainWindow(QMainWindow):
             'scale': self.scale_checkbox.isChecked(),
             'tile_unwrap': hasattr(self, 'tile_unwrap_checkbox') and self.tile_unwrap_checkbox.isChecked(),
             'tile_size': self.tile_size_slider.value(),
-            'series_count': 64
+            'series_count': int(self.series_spin.value())
         }
         
         self.worker = MeasurementWorker(self.camera_ctrl, self.arduino_ctrl, params)
         self.worker.new_phase_image.connect(self.update_phase_image)
         self.worker.phase_data_ready.connect(self.on_phase_data_ready)
         self.worker.new_interferogram.connect(self.update_interferogram_image)
-        self.worker.new_step_image.connect(self.add_step_thumbnail)
+        # Отображение миниатюр шагов удалено
         self.worker.finished.connect(self.on_measurement_finished)
         self.worker.error.connect(self.on_measurement_error)
         self.worker.start()
         
         self.start_button.setText("Остановить измерение")
 
-        # Очистка полоски миниатюр перед новой серией
-        self.expected_steps = params['steps']
-        while self.thumb_layout.count():
-            item = self.thumb_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        # Очистка миниатюр не требуется
 
     def stop_measurement(self):
         if self.worker:
@@ -609,7 +598,7 @@ class MainWindow(QMainWindow):
         self.last_phase_qimage = q_image
         if getattr(self, 'main_view_mode', 'camera') == 'phase':
             self.interferogram_view.set_image(q_image, preserve_transform=True)
-        self.add_gallery_item(q_image, "Фаза")
+        
         
 
     @Slot(np.ndarray)
@@ -636,57 +625,9 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Ошибка измерения", error_msg)
         self.start_button.setText("Начать измерение")
 
-    def save_image(self):
-        if self.last_phase_qimage is not None:
-            filename, _ = QFileDialog.getSaveFileName(
-                self, "Сохранить изображение", "phase_image.png", 
-                "PNG файлы (*.png);;JPEG файлы (*.jpg)"
-            )
-            if filename:
-                QPixmap.fromImage(self.last_phase_qimage).save(filename)
-                QMessageBox.information(self, "Успех", f"Изображение сохранено: {filename}")
+    
 
-    def save_interferogram_image(self):
-        if self.interferogram_view._pix_item.pixmap() and not self.interferogram_view._pix_item.pixmap().isNull():
-            filename, _ = QFileDialog.getSaveFileName(
-                self, "Сохранить интерферограмму", "interferogram.png", 
-                "PNG файлы (*.png);;JPEG файлы (*.jpg)"
-            )
-            if filename:
-                self.interferogram_view._pix_item.pixmap().save(filename)
-                QMessageBox.information(self, "Успех", f"Интерферограмма сохранена: {filename}")
-
-    def add_step_thumbnail(self, frame):
-        if frame is None:
-            return
-        # Ограничиваем количество миниатюр числом шагов
-        if hasattr(self, 'expected_steps') and self.thumb_layout.count() >= self.expected_steps:
-            return
-        if len(frame.shape) == 2:
-            h, w = frame.shape
-            qimg = QImage(frame.data, w, h, w, QImage.Format_Grayscale8)
-        else:
-            h, w, c = frame.shape
-            qimg = QImage(frame.data, w, h, 3 * w, QImage.Format_RGB888)
-        index = self.thumb_layout.count() + 1
-        item = ClickableThumb(qimg, f"Шаг {index}")
-        item.clicked.connect(lambda qi, cap=f"Шаг {index}": self.open_image_in_viewer(qi, cap))
-        self.thumb_layout.addWidget(item)
-
-    def add_gallery_item(self, qimg, caption):
-        item = ClickableThumb(qimg, caption)
-        item.clicked.connect(lambda qi, cap=caption: self.open_image_in_viewer(qi, cap))
-        self.thumb_layout.addWidget(item)
-
-    def open_image_in_viewer(self, qimg, title):
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title)
-        lay = QVBoxLayout(dlg)
-        view = GraphicsImageView()
-        lay.addWidget(view)
-        view.set_image(qimg, preserve_transform=False)
-        dlg.showMaximized()
-        dlg.exec()
+    
 
     def save_settings(self):
         filename, _ = QFileDialog.getSaveFileName(

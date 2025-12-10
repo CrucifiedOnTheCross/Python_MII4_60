@@ -80,22 +80,12 @@ class DPIRecorder(QObject):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             base_filename = f"phase_{self.image_count:04d}_{timestamp}"
             
-            # Сохраняем изображение
-            image_path = os.path.join(self.output_directory, f"{base_filename}.png")
-            if hasattr(phase_image, 'save'):
-                # Если это QImage
-                phase_image.save(image_path)
-            else:
-                # Если это numpy array
-                import cv2
-                cv2.imwrite(image_path, phase_image)
-            
             # Сохраняем данные в CSV
             csv_path = os.path.join(self.output_directory, f"{base_filename}.csv")
             self._save_phase_to_csv(phase_data, csv_path)
             
             self.image_count += 1
-            self.image_saved.emit(self.image_count, image_path)
+            self.image_saved.emit(self.image_count, csv_path)
             
         except Exception as e:
             self.error_occurred.emit(f"Ошибка сохранения: {str(e)}")
