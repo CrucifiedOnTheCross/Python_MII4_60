@@ -28,8 +28,9 @@ class DPIRecorder(QObject):
         self.output_directory = ""
         self.image_count = 0
         self.start_time = None
+        self.params = {}
         
-    def start_recording(self, output_directory):
+    def start_recording(self, output_directory, params=None):
         """
         Начинает DPI запись
         
@@ -46,6 +47,7 @@ class DPIRecorder(QObject):
             self.is_recording = True
             self.image_count = 0
             self.start_time = time.time()
+            self.params = params or {}
             
             self.recording_started.emit()
             return True
@@ -123,31 +125,23 @@ class DPIRecorder(QObject):
             'elapsed_time': elapsed_time
         }
     
-    def create_summary_file(self):
-        """
-        Создает файл с сводкой записи
-        """
+    def create_values_file(self):
         if not self.output_directory:
             return
             
         try:
-            summary_path = os.path.join(self.output_directory, "recording_summary.txt")
-            
-            with open(summary_path, 'w', encoding='utf-8') as f:
-                f.write("DPI Recording Summary\n")
-                f.write("=" * 30 + "\n\n")
-                f.write(f"Recording Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Output Directory: {self.output_directory}\n")
-                f.write(f"Total Images: {self.image_count}\n")
-                
-                if self.start_time:
-                    elapsed = time.time() - self.start_time
-                    f.write(f"Recording Duration: {elapsed:.2f} seconds\n")
-                
-                f.write(f"\nFiles saved:\n")
-                for i in range(self.image_count):
-                    f.write(f"  - phase_{i:04d}_*.png\n")
-                    f.write(f"  - phase_{i:04d}_*.csv\n")
-                    
+            values_path = os.path.join(self.output_directory, "values.txt")
+            elapsed_ms = int((time.time() - self.start_time) * 1000) if self.start_time else 0
+            steps = int(self.params.get('steps', 0))
+            wavelength = float(self.params.get('lambda_angstrom', 0.0))
+            threshold = float(self.params.get('threshold', 0.0))
+            delay = int(self.params.get('delay', 0))
+            with open(values_path, 'w', encoding='utf-8') as f:
+                f.write(f"Time ms:  {elapsed_ms}\n")
+                f.write(f"Quantity:  {self.image_count}\n")
+                f.write(f"Algorythm:  {steps} step\n")
+                f.write(f"Wavelagth:  {wavelength:.1f}\n")
+                f.write(f"Threshold:  {threshold}\n")
+                f.write(f"Delay:  {delay}\n")
         except Exception as e:
-            self.error_occurred.emit(f"Ошибка создания сводки: {str(e)}")
+            self.error_occurred.emit(f"Ошибка создания values: {str(e)}")

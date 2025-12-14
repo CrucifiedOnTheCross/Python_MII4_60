@@ -65,7 +65,7 @@ class MeasurementWorker(QThread):
         self.arduino = arduino
         self.params = params
         self.is_running = True
-        self.processor = PhaseProcessor(lambda_nm=params['lambda'])
+        self.processor = PhaseProcessor(lambda_angstrom=params['lambda_angstrom'])
         self.colormap = load_colormap(config.COLORMAP_FILE)
 
     def run(self):
@@ -200,10 +200,10 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(self.steps_combo)
         
         # Длина волны
-        self.controls_layout.addWidget(QLabel("Длина волны (нм):"))
+        self.controls_layout.addWidget(QLabel("Длина волны (Å):"))
         self.lambda_input = QLineEdit()
-        self.lambda_input.setText("750")
-        self.lambda_input.setValidator(QDoubleValidator(400.0, 800.0, 1))  # Ограничиваем диапазон видимого света
+        self.lambda_input.setText("7500")
+        self.lambda_input.setValidator(QDoubleValidator(4000.0, 8000.0, 1))
         self.controls_layout.addWidget(self.lambda_input)
         
         # Задержка
@@ -235,10 +235,6 @@ class MainWindow(QMainWindow):
         
         self.rainbow_checkbox = QCheckBox("Радужная палитра")
         self.controls_layout.addWidget(self.rainbow_checkbox)
-        
-        self.scale_checkbox = QCheckBox("Масштаб λ/2π")
-        self.scale_checkbox.setChecked(True)
-        self.controls_layout.addWidget(self.scale_checkbox)
         
         # Добавляем расширенные элементы управления
         self.setup_advanced_controls()
@@ -536,14 +532,14 @@ class MainWindow(QMainWindow):
         
         params = {
             'steps': int(self.steps_combo.currentText()),
-            'lambda': float(self.lambda_input.text()),
+            'lambda_angstrom': float(self.lambda_input.text()),
             'delay': self.delay_slider.value(),
             'unwrap': self.unwrap_checkbox.isChecked(),
             'remove_trend': self.trend_checkbox.isChecked(),
             'inverse': self.inverse_checkbox.isChecked(),
             'rainbow': self.rainbow_checkbox.isChecked(),
             'threshold': self.threshold_slider.value() / 100.0,
-            'scale': self.scale_checkbox.isChecked(),
+            'scale': True,
             'tile_unwrap': hasattr(self, 'tile_unwrap_checkbox') and self.tile_unwrap_checkbox.isChecked(),
             'tile_size': self.tile_size_slider.value(),
             'series_count': int(self.series_spin.value())
@@ -704,7 +700,13 @@ class MainWindow(QMainWindow):
                 ""
             )
             if folder:
-                if self.dpi_recorder.start_recording(folder):
+                params = {
+                    'steps': int(self.steps_combo.currentText()),
+                    'lambda_angstrom': float(self.lambda_input.text()),
+                    'threshold': self.threshold_slider.value() / 100.0,
+                    'delay': self.delay_slider.value()
+                }
+                if self.dpi_recorder.start_recording(folder, params):
                     self.dpi_record_button.setText("Остановить DPI запись")
                     self.dpi_status_label.setText("DPI: Запись...")
         else:
@@ -721,8 +723,7 @@ class MainWindow(QMainWindow):
         """Обработчик остановки DPI записи"""
         self.dpi_record_button.setText("Начать DPI запись")
         self.dpi_status_label.setText("DPI: Остановлена")
-        # Создаем файл сводки
-        self.dpi_recorder.create_summary_file()
+        self.dpi_recorder.create_values_file()
     
     def on_dpi_image_saved(self, image_number, filepath):
         """Обработчик сохранения изображения DPI"""

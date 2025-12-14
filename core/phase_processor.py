@@ -5,8 +5,9 @@ from skimage.restoration import unwrap_phase
 
 class PhaseProcessor:
     """Выполняет все вычисления, связанные с фазой."""
-    def __init__(self, lambda_nm=632.8):
-        self.lambda_nm = lambda_nm
+    def __init__(self, lambda_angstrom=7500.0):
+        self.lambda_angstrom = lambda_angstrom
+        self.lambda_nm = lambda_angstrom / 10.0
 
     def compute_phase(self, images, steps):
         """
@@ -41,13 +42,13 @@ class PhaseProcessor:
         return unwrap_phase(wrapped_phase)
 
     def scale_phase(self, phase_radians):
-        return phase_radians * (self.lambda_nm / (2 * np.pi))
+        return phase_radians * (self.lambda_angstrom / (2 * np.pi))
 
     def threshold_unwrap(self, height_map, threshold=0.8, iterations=1, horizontal=True, vertical=True):
         if height_map is None:
             return None
         h = height_map.copy()
-        lam = self.lambda_nm
+        lam = self.lambda_angstrom
         for _ in range(max(1, iterations)):
             if horizontal:
                 rows, cols = h.shape
@@ -78,7 +79,7 @@ class PhaseProcessor:
         return h
 
     def phase_jump(self, tile, threshold=0.8):
-        lam = self.lambda_nm
+        lam = self.lambda_angstrom
         img = tile
         j = False
         h, w = img.shape
@@ -93,7 +94,7 @@ class PhaseProcessor:
         return j
 
     def special_unwrap(self, p, tiles_mask, delimeter, threshold=0.8):
-        lam = self.lambda_nm
+        lam = self.lambda_angstrom
         ResY, ResX = p.shape
         for i in range(3):
             for y in range(ResY):

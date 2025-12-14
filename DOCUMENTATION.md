@@ -310,7 +310,7 @@ T(x,y) = Σᵢ₌₀ⁿ Σⱼ₌₀ⁿ⁻ⁱ aᵢⱼxⁱyʲ
 ```python
 # Алгоритмические параметры
 DEFAULT_STEPS = 3                    # Количество шагов
-DEFAULT_LAMBDA = 632.8               # Длина волны (нм)
+DEFAULT_LAMBDA = 7500                # Длина волны (Å)
 DEFAULT_THRESHOLD = 0.8              # Порог качества
 DEFAULT_DELAY = 300                  # Задержка между кадрами (мс)
 
@@ -526,7 +526,7 @@ logging.basicConfig(
 
 **Основные параметры**:
 - `DEFAULT_STEPS = 3` - количество шагов по умолчанию
-- `DEFAULT_LAMBDA = 632.8` - длина волны в нм (He-Ne лазер)
+- `DEFAULT_LAMBDA = 7500` - длина волны в Å
 - `DEFAULT_THRESHOLD = 0.8` - пороговое значение
 - `DEFAULT_DELAY = 300` - задержка между измерениями в мс
 - `DEFAULT_CAMERA_RESOLUTION = (640, 480)` - разрешение камеры
@@ -605,8 +605,8 @@ logging.basicConfig(
 
 **Назначение**: Выполнение всех вычислений, связанных с обработкой фазы
 
-#### `__init__(lambda_nm=632.8)`
-- **Параметры**: `lambda_nm` (float) - длина волны в нанометрах
+#### `__init__(lambda_angstrom=7500.0)`
+- **Параметры**: `lambda_angstrom` (float) - длина волны в ангстремах
 
 #### `compute_phase(images, steps)`
 - **Параметры**: 
