@@ -9,6 +9,8 @@ import numpy as np
 from datetime import datetime
 import csv
 from PySide6.QtCore import QObject, Signal
+import threading
+import queue
 
 
 class DPIRecorder(QObject):
@@ -29,6 +31,10 @@ class DPIRecorder(QObject):
         self.image_count = 0
         self.start_time = None
         self.params = {}
+        self._queue = queue.Queue()
+        self._writer_thread = None
+        self._stop_event = threading.Event()
+        self._writing = False
         
     def start_recording(self, output_directory, params=None):
         """
@@ -48,6 +54,15 @@ class DPIRecorder(QObject):
             self.image_count = 0
             self.start_time = time.time()
             self.params = params or {}
+            while not self._queue.empty():
+                try:
+                    self._queue.get_nowait()
+                except Exception:
+                    break
+            self._stop_event.clear()
+            if self._writer_thread is None or not self._writer_thread.is_alive():
+                self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+                self._writer_thread.start()
             
             self.recording_started.emit()
             return True
@@ -64,30 +79,20 @@ class DPIRecorder(QObject):
             return
             
         self.is_recording = False
+        self._stop_event.set()
+        t = self._writer_thread
+        if t is not None:
+            t.join(timeout=10)
         self.create_values_file()
         self.recording_stopped.emit()
     
     def save_phase_data(self, phase_data, phase_image):
-        """
-        Сохраняет фазовые данные и изображение
-        
-        Args:
-            phase_data: 2D numpy array с фазовыми данными
-            phase_image: QImage или numpy array с изображением фазы
-        """
         if not self.is_recording or phase_data is None:
             return
-            
         try:
-            num = self.image_count + 1
-            base_filename = f"test{num}"
-            csv_path = os.path.join(self.output_directory, f"{base_filename}.csv")
-            self._save_phase_to_csv(phase_data, csv_path)
-            self.image_count = num
-            self.image_saved.emit(self.image_count, csv_path)
-            
+            self._queue.put_nowait(phase_data)
         except Exception as e:
-            self.error_occurred.emit(f"Ошибка сохранения: {str(e)}")
+            self.error_occurred.emit(f"Ошибка постановки в очередь: {str(e)}")
     
     def _save_phase_to_csv(self, phase_data, csv_path):
         """
@@ -103,6 +108,38 @@ class DPIRecorder(QObject):
             np.savetxt(csv_path, data_int, fmt='%d', delimiter=',')
         except Exception as e:
             self.error_occurred.emit(f"Ошибка сохранения CSV: {str(e)}")
+    
+    def _writer_loop(self):
+        while not self._stop_event.is_set() or not self._queue.empty():
+            try:
+                phase_data = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self._writing = True
+                num = self.image_count + 1
+                base_filename = f"test{num}"
+                csv_path = os.path.join(self.output_directory, f"{base_filename}.csv")
+                self._save_phase_to_csv(phase_data, csv_path)
+                self.image_count = num
+                self.image_saved.emit(self.image_count, csv_path)
+            except Exception as e:
+                self.error_occurred.emit(f"Ошибка записи: {str(e)}")
+            finally:
+                self._writing = False
+                self._queue.task_done()
+    
+    def wait_until_idle(self, timeout=10.0):
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if self._queue.empty() and not self._writing:
+                return True
+            time.sleep(0.05)
+        return False
+    
+    def create_values_file_after_flush(self):
+        self.wait_until_idle(timeout=10.0)
+        self.create_values_file()
     
     def get_recording_info(self):
         """

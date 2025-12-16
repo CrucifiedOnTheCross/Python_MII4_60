@@ -616,7 +616,7 @@ class MainWindow(QMainWindow):
     def on_measurement_finished(self):
         self.start_button.setText("Начать измерение")
         if self.dpi_recorder.is_recording:
-            self.dpi_recorder.create_values_file()
+            self.dpi_recorder.create_values_file_after_flush()
 
     def on_measurement_error(self, error_msg):
         QMessageBox.critical(self, "Ошибка измерения", error_msg)
