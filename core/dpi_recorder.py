@@ -23,6 +23,7 @@ class DPIRecorder(QObject):
     recording_stopped = Signal()
     image_saved = Signal(int, str)  # номер изображения, путь к файлу
     error_occurred = Signal(str)
+    values_ready = Signal(str)
     
     def __init__(self):
         super().__init__()
@@ -35,6 +36,7 @@ class DPIRecorder(QObject):
         self._writer_thread = None
         self._stop_event = threading.Event()
         self._writing = False
+        self._experiment_finished = False
         
     def start_recording(self, output_directory, params=None):
         """
@@ -60,6 +62,7 @@ class DPIRecorder(QObject):
                 except Exception:
                     break
             self._stop_event.clear()
+            self._experiment_finished = False
             if self._writer_thread is None or not self._writer_thread.is_alive():
                 self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
                 self._writer_thread.start()
@@ -83,6 +86,7 @@ class DPIRecorder(QObject):
         t = self._writer_thread
         if t is not None:
             t.join(timeout=10)
+        # Значение записывается после завершения эксперимента либо здесь, если запись остановлена вручную
         self.create_values_file()
         self.recording_stopped.emit()
     
@@ -128,6 +132,15 @@ class DPIRecorder(QObject):
             finally:
                 self._writing = False
                 self._queue.task_done()
+            # Если эксперимент завершён и очередь пуста - пишем values
+            if self._experiment_finished and self._queue.empty():
+                try:
+                    self.create_values_file()
+                    self.values_ready.emit(os.path.join(self.output_directory, "values.txt"))
+                except Exception as e:
+                    self.error_occurred.emit(f"Ошибка финализации values: {str(e)}")
+                # Сбрасываем флаг, чтобы не создавать файл повторно
+                self._experiment_finished = False
     
     def wait_until_idle(self, timeout=10.0):
         start = time.monotonic()
@@ -140,6 +153,9 @@ class DPIRecorder(QObject):
     def create_values_file_after_flush(self):
         self.wait_until_idle(timeout=10.0)
         self.create_values_file()
+
+    def mark_experiment_end(self):
+        self._experiment_finished = True
     
     def get_recording_info(self):
         """
