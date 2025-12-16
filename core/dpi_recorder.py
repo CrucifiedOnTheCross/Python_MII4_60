@@ -99,7 +99,8 @@ class DPIRecorder(QObject):
         """
         try:
             os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-            np.savetxt(csv_path, phase_data, fmt='%.6f', delimiter=',')
+            data_int = np.rint(phase_data).astype(np.int64)
+            np.savetxt(csv_path, data_int, fmt='%d', delimiter=',')
         except Exception as e:
             self.error_occurred.emit(f"Ошибка сохранения CSV: {str(e)}")
     

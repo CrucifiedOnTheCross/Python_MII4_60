@@ -118,7 +118,8 @@ def save_image_as_csv(image, save_path):
     """Сохранить изображение в CSV формате"""
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        np.savetxt(save_path, image, fmt='%.6f', delimiter=',')
+        data_int = np.rint(image).astype(np.int64)
+        np.savetxt(save_path, data_int, fmt='%d', delimiter=',')
         if os.path.exists(save_path):
             print(f"Изображение сохранено в CSV формате: {save_path}")
             return True, save_path
