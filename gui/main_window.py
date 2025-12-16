@@ -530,6 +530,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Камера не подключена")
             return
         
+        if self.dpi_recorder.is_recording:
+            self.dpi_recorder.image_count = 0
+            self.dpi_recorder.start_time = time.time()
+        
         params = {
             'steps': int(self.steps_combo.currentText()),
             'lambda_angstrom': float(self.lambda_input.text()),
@@ -575,14 +579,7 @@ class MainWindow(QMainWindow):
         # Сохраняем текущие данные для экспорта
         self.export_csv_button.setEnabled(True)
         
-        if self.dpi_recorder.is_recording and self.current_phase_data is not None:
-            if len(cv_img.shape) == 2:
-                h, w = cv_img.shape
-                qimg_save = QImage(cv_img.data, w, h, w, QImage.Format_Grayscale8)
-            else:
-                h, w, c = cv_img.shape
-                qimg_save = QImage(cv_img.data, w, h, 3 * w, QImage.Format_RGB888).rgbSwapped()
-            self.dpi_recorder.save_phase_data(self.current_phase_data, qimg_save)
+        # Сохранение DPI перенесено в on_phase_data_ready для надёжности
         
         # Отображаем изображение
         if len(cv_img.shape) == 2:
@@ -613,9 +610,13 @@ class MainWindow(QMainWindow):
     @Slot(np.ndarray)
     def on_phase_data_ready(self, phase_data):
         self.current_phase_data = phase_data
+        if self.dpi_recorder.is_recording and phase_data is not None:
+            self.dpi_recorder.save_phase_data(phase_data, None)
 
     def on_measurement_finished(self):
         self.start_button.setText("Начать измерение")
+        if self.dpi_recorder.is_recording:
+            self.dpi_recorder.create_values_file()
 
     def on_measurement_error(self, error_msg):
         QMessageBox.critical(self, "Ошибка измерения", error_msg)
@@ -723,7 +724,6 @@ class MainWindow(QMainWindow):
         """Обработчик остановки DPI записи"""
         self.dpi_record_button.setText("Начать DPI запись")
         self.dpi_status_label.setText("DPI: Остановлена")
-        self.dpi_recorder.create_values_file()
     
     def on_dpi_image_saved(self, image_number, filepath):
         """Обработчик сохранения изображения DPI"""

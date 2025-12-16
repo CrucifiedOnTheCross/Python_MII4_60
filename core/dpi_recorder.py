@@ -64,6 +64,7 @@ class DPIRecorder(QObject):
             return
             
         self.is_recording = False
+        self.create_values_file()
         self.recording_stopped.emit()
     
     def save_phase_data(self, phase_data, phase_image):
@@ -78,15 +79,11 @@ class DPIRecorder(QObject):
             return
             
         try:
-            # Генерируем имя файла с временной меткой
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_filename = f"phase_{self.image_count:04d}_{timestamp}"
-            
-            # Сохраняем данные в CSV
+            num = self.image_count + 1
+            base_filename = f"test{num}"
             csv_path = os.path.join(self.output_directory, f"{base_filename}.csv")
             self._save_phase_to_csv(phase_data, csv_path)
-            
-            self.image_count += 1
+            self.image_count = num
             self.image_saved.emit(self.image_count, csv_path)
             
         except Exception as e:
