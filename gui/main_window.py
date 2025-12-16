@@ -56,7 +56,7 @@ class MeasurementWorker(QThread):
     new_interferogram = Signal(np.ndarray)
     phase_data_ready = Signal(np.ndarray)
     new_step_image = Signal(np.ndarray)
-    finished = Signal()
+    # finished = Signal()  <-- УДАЛЕНО: используем встроенный сигнал QThread.finished
     error = Signal(str)
 
     def __init__(self, camera, arduino, params):
@@ -82,15 +82,13 @@ class MeasurementWorker(QThread):
                         self.arduino.send_step_command(i)
                     time.sleep(self.params['delay'] / 1000.0)
                     
-                    # --- ИЗМЕНЕНИЕ 1: Добавлен цикл повторных попыток ---
+                    # Цикл повторных попыток получения кадра
                     frame = None
                     for retry in range(5):
                         frame = self.camera.get_frame()
                         if frame is not None:
                             break
-                        # Небольшая пауза перед повторной попыткой
                         time.sleep(0.01)
-                    # ----------------------------------------------------
 
                     if frame is None:
                         raise Exception("Не удалось получить кадр с камеры (timeout).")
@@ -138,7 +136,7 @@ class MeasurementWorker(QThread):
                             interferogram = cv2.cvtColor(interferogram, cv2.COLOR_BGR2RGB)
                         self.new_interferogram.emit(interferogram)
             
-            self.finished.emit()
+            # self.finished.emit() <-- УДАЛЕНО: QThread сам отправит finished при выходе из run()
         except Exception as e:
             self.error.emit(str(e))
 
@@ -540,9 +538,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Камера не подключена")
             return
         
-        # --- ИЗМЕНЕНИЕ 2: Останавливаем поток превью, чтобы освободить камеру ---
+        # Останавливаем поток превью, чтобы освободить камеру
         self.stop_camera_stream()
-        # ------------------------------------------------------------------------
 
         if self.dpi_recorder.is_recording:
             self.dpi_recorder.image_count = 0
@@ -568,14 +565,12 @@ class MainWindow(QMainWindow):
         self.worker.phase_data_ready.connect(self.on_phase_data_ready)
         self.worker.phase_data_ready.connect(self.dpi_recorder.save_phase_data)
         self.worker.new_interferogram.connect(self.update_interferogram_image)
-        # Отображение миниатюр шагов удалено
+        # Подключаемся к стандартному сигналу finished
         self.worker.finished.connect(self.on_measurement_finished)
         self.worker.error.connect(self.on_measurement_error)
         self.worker.start()
         
         self.start_button.setText("Остановить измерение")
-
-        # Очистка миниатюр не требуется
 
     def stop_measurement(self):
         if self.worker:
@@ -585,18 +580,11 @@ class MainWindow(QMainWindow):
 
     @Slot(np.ndarray)
     def update_phase_image(self, cv_img):
-        # Применяем полиномиальное удаление тренда если включено
         if hasattr(self, 'polynomial_trend_checkbox') and self.polynomial_trend_checkbox.isChecked():
-            # Получаем фазовые данные из изображения (это упрощение)
-            # В реальности нужно передавать фазовые данные отдельно
             pass
         
-        # Сохраняем текущие данные для экспорта
         self.export_csv_button.setEnabled(True)
         
-        # Сохранение DPI перенесено в on_phase_data_ready для надёжности
-        
-        # Отображаем изображение
         if len(cv_img.shape) == 2:
             h, w = cv_img.shape
             q_image = QImage(cv_img.data, w, h, w, QImage.Format_Grayscale8)
@@ -606,8 +594,6 @@ class MainWindow(QMainWindow):
         self.last_phase_qimage = q_image
         if getattr(self, 'main_view_mode', 'camera') == 'phase':
             self.interferogram_view.set_image(q_image, preserve_transform=True)
-        
-        
 
     @Slot(np.ndarray)
     def update_interferogram_image(self, frame):
@@ -620,7 +606,6 @@ class MainWindow(QMainWindow):
             q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
         if getattr(self, 'main_view_mode', 'camera') == 'camera':
             self.interferogram_view.set_image(q_image, preserve_transform=True)
-        
 
     @Slot(np.ndarray)
     def on_phase_data_ready(self, phase_data):
@@ -631,21 +616,13 @@ class MainWindow(QMainWindow):
         if self.dpi_recorder.is_recording:
             self.dpi_recorder.mark_experiment_end()
         
-        # --- ИЗМЕНЕНИЕ 3: Запускаем поток превью обратно ---
+        # Перезапускаем поток превью после завершения измерения
         self.start_camera_stream()
-        # ---------------------------------------------------
 
     def on_measurement_error(self, error_msg):
         QMessageBox.critical(self, "Ошибка измерения", error_msg)
         self.start_button.setText("Начать измерение")
-        
-        # --- ИЗМЕНЕНИЕ 4: Запускаем поток превью обратно ---
-        self.start_camera_stream()
-        # ---------------------------------------------------
-
-    
-
-    
+        # Здесь НЕ вызываем start_camera_stream(), так как QThread.finished будет вызван в любом случае
 
     def save_settings(self):
         filename, _ = QFileDialog.getSaveFileName(
@@ -715,7 +692,6 @@ class MainWindow(QMainWindow):
     def toggle_dpi_recording(self):
         """Переключение DPI записи"""
         if not self.dpi_recorder.is_recording:
-            # Выбираем папку для сохранения
             folder = QFileDialog.getExistingDirectory(
                 self, 
                 "Выберите папку для DPI записи",
@@ -737,25 +713,20 @@ class MainWindow(QMainWindow):
             self.dpi_status_label.setText("DPI: Остановлена")
     
     def on_dpi_recording_started(self):
-        """Обработчик начала DPI записи"""
         self.dpi_record_button.setText("Остановить DPI запись")
         self.dpi_status_label.setText("DPI: Запись...")
     
     def on_dpi_recording_stopped(self):
-        """Обработчик остановки DPI записи"""
         self.dpi_record_button.setText("Начать DPI запись")
         self.dpi_status_label.setText("DPI: Остановлена")
     
     def on_dpi_image_saved(self, image_number, filepath):
-        """Обработчик сохранения изображения DPI"""
         self.dpi_status_label.setText(f"DPI: Сохранено {image_number} изображений")
     
     def on_error(self, error_msg):
-        """Обработчик ошибок"""
         QMessageBox.critical(self, "Ошибка", error_msg)
     
     def export_phase_data_csv(self):
-        """Экспорт фазовых данных в CSV"""
         if not hasattr(self, 'current_phase_data') or self.current_phase_data is None:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
             return
@@ -775,8 +746,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка", result)
 
     def closeEvent(self, event):
-        """Обработчик закрытия окна."""
-        # Останавливаем все активные процессы
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait()
@@ -787,25 +756,26 @@ class MainWindow(QMainWindow):
         if self.dpi_recorder.is_recording:
             self.dpi_recorder.stop_recording()
             
-        # Отключаем контроллеры
         self.camera_ctrl.stop()
         self.arduino_ctrl.disconnect()
         
         event.accept()
     
     def toggle_camera_stream(self):
-        """Переключает состояние трансляции камеры."""
         if self.camera_stream_worker and self.camera_stream_worker.isRunning():
             self.stop_camera_stream()
         else:
             self.start_camera_stream()
     
     def start_camera_stream(self):
-        """Запускает трансляцию видео с камеры."""
         if not self.camera_ctrl.is_running:
             QMessageBox.warning(self, "Ошибка", "Сначала выберите и подключите камеру")
             return
             
+        # Защита от повторного запуска работающего потока
+        if self.camera_stream_worker is not None and self.camera_stream_worker.isRunning():
+            return
+
         try:
             self.camera_stream_worker = CameraStreamWorker(self.camera_ctrl)
             self.camera_stream_worker.new_frame.connect(self.update_camera_frame)
@@ -819,7 +789,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось запустить трансляцию: {e}")
     
     def stop_camera_stream(self):
-        """Останавливает трансляцию видео с камеры."""
         if self.camera_stream_worker and self.camera_stream_worker.isRunning():
             self.camera_stream_worker.stop()
             self.stream_button.setText("Включить трансляцию")
@@ -827,7 +796,6 @@ class MainWindow(QMainWindow):
     
     @Slot(np.ndarray)
     def update_camera_frame(self, frame):
-        """Обновляет отображение кадра с камеры."""
         try:
             height, width, channel = frame.shape
             bytes_per_line = 3 * width
@@ -852,7 +820,6 @@ class MainWindow(QMainWindow):
     
     @Slot(str)
     def on_camera_stream_error(self, error_msg):
-        """Обработчик ошибок трансляции камеры."""
         QMessageBox.critical(self, "Ошибка трансляции", error_msg)
         self.stop_camera_stream()
 
