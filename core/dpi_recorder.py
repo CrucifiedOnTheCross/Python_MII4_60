@@ -90,7 +90,7 @@ class DPIRecorder(QObject):
         self.create_values_file()
         self.recording_stopped.emit()
     
-    def save_phase_data(self, phase_data, phase_image):
+    def save_phase_data(self, phase_data, phase_image=None):
         if not self.is_recording or phase_data is None:
             return
         try:
