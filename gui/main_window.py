@@ -81,9 +81,19 @@ class MeasurementWorker(QThread):
                     if self.arduino and self.arduino.is_connected:
                         self.arduino.send_step_command(i)
                     time.sleep(self.params['delay'] / 1000.0)
-                    frame = self.camera.get_frame()
+                    
+                    # --- ИЗМЕНЕНИЕ 1: Добавлен цикл повторных попыток ---
+                    frame = None
+                    for retry in range(5):
+                        frame = self.camera.get_frame()
+                        if frame is not None:
+                            break
+                        # Небольшая пауза перед повторной попыткой
+                        time.sleep(0.01)
+                    # ----------------------------------------------------
+
                     if frame is None:
-                        raise Exception("Не удалось получить кадр с камеры.")
+                        raise Exception("Не удалось получить кадр с камеры (timeout).")
                     images.append(frame)
                     self.new_step_image.emit(frame)
 
@@ -530,6 +540,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Камера не подключена")
             return
         
+        # --- ИЗМЕНЕНИЕ 2: Останавливаем поток превью, чтобы освободить камеру ---
+        self.stop_camera_stream()
+        # ------------------------------------------------------------------------
+
         if self.dpi_recorder.is_recording:
             self.dpi_recorder.image_count = 0
             self.dpi_recorder.start_time = time.time()
@@ -616,10 +630,18 @@ class MainWindow(QMainWindow):
         self.start_button.setText("Начать измерение")
         if self.dpi_recorder.is_recording:
             self.dpi_recorder.mark_experiment_end()
+        
+        # --- ИЗМЕНЕНИЕ 3: Запускаем поток превью обратно ---
+        self.start_camera_stream()
+        # ---------------------------------------------------
 
     def on_measurement_error(self, error_msg):
         QMessageBox.critical(self, "Ошибка измерения", error_msg)
         self.start_button.setText("Начать измерение")
+        
+        # --- ИЗМЕНЕНИЕ 4: Запускаем поток превью обратно ---
+        self.start_camera_stream()
+        # ---------------------------------------------------
 
     
 
