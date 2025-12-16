@@ -552,6 +552,7 @@ class MainWindow(QMainWindow):
         self.worker = MeasurementWorker(self.camera_ctrl, self.arduino_ctrl, params)
         self.worker.new_phase_image.connect(self.update_phase_image)
         self.worker.phase_data_ready.connect(self.on_phase_data_ready)
+        self.worker.phase_data_ready.connect(self.dpi_recorder.save_phase_data)
         self.worker.new_interferogram.connect(self.update_interferogram_image)
         # Отображение миниатюр шагов удалено
         self.worker.finished.connect(self.on_measurement_finished)
@@ -610,8 +611,6 @@ class MainWindow(QMainWindow):
     @Slot(np.ndarray)
     def on_phase_data_ready(self, phase_data):
         self.current_phase_data = phase_data
-        if self.dpi_recorder.is_recording and phase_data is not None:
-            self.dpi_recorder.save_phase_data(phase_data, None)
 
     def on_measurement_finished(self):
         self.start_button.setText("Начать измерение")
