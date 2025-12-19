@@ -100,16 +100,14 @@ class DPIRecorder(QObject):
     
     def _save_phase_to_csv(self, phase_data, csv_path):
         """
-        Сохраняет фазовые данные в CSV файл
-        
-        Args:
-            phase_data: 2D numpy array с фазовыми данными
-            csv_path: путь к CSV файлу
+        Сохраняет фазовые данные в CSV файл.
+        ИСПРАВЛЕНО: сохранение float вместо int для совместимости с Java.
         """
         try:
             os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-            data_int = np.rint(phase_data).astype(np.int64)
-            np.savetxt(csv_path, data_int, fmt='%d', delimiter=',')
+            # Java код считывает float (t.getFloat), поэтому сохраняем с точностью
+            # np.rint и int64 удалены, чтобы не терять фазовую информацию
+            np.savetxt(csv_path, phase_data, fmt='%.6f', delimiter=',')
         except Exception as e:
             self.error_occurred.emit(f"Ошибка сохранения CSV: {str(e)}")
     
@@ -160,9 +158,6 @@ class DPIRecorder(QObject):
     def get_recording_info(self):
         """
         Возвращает информацию о текущей записи
-        
-        Returns:
-            dict с информацией о записи
         """
         if not self.is_recording:
             return None
@@ -177,6 +172,10 @@ class DPIRecorder(QObject):
         }
     
     def create_values_file(self):
+        """
+        Создает файл values.txt с метаданными.
+        ИСПРАВЛЕНО: удалены лишние пробелы для корректного парсинга в Java.
+        """
         if not self.output_directory:
             return
             
@@ -187,12 +186,14 @@ class DPIRecorder(QObject):
             wavelength = float(self.params.get('lambda_angstrom', 0.0))
             threshold = float(self.params.get('threshold', 0.0))
             delay = int(self.params.get('delay', 0))
+            
             with open(values_path, 'w', encoding='utf-8') as f:
-                f.write(f"Time ms:  {elapsed_ms}\n")
-                f.write(f"Quantity:  {self.image_count}\n")
-                f.write(f"Algorythm:  {steps} step\n")
-                f.write(f"Wavelagth:  {wavelength:.1f}\n")
-                f.write(f"Threshold:  {threshold}\n")
-                f.write(f"Delay:  {delay}\n")
+                # Java использует split(" "), поэтому важен ровно один пробел между ключами и значениями
+                f.write(f"Time ms: {elapsed_ms}\n")      # Было "Time ms:  {val}" -> Java читала пустую строку вместо числа
+                f.write(f"Quantity: {self.image_count}\n") # Было "Quantity:  {val}"
+                f.write(f"Algorythm: {steps} step\n")
+                f.write(f"Wavelagth: {wavelength:.1f}\n")
+                f.write(f"Threshold: {threshold}\n")
+                f.write(f"Delay: {delay}\n")
         except Exception as e:
             self.error_occurred.emit(f"Ошибка создания values: {str(e)}")

@@ -199,41 +199,41 @@ class PhaseProcessor:
         return b
 
     def remove_linear_trend(self, phase_data):
-        """Векторизированное удаление линейного тренда."""
+        """
+        Удаляет линейный тренд (наклон), рассчитанный по краям изображения,
+        чтобы соответствовать поведению оригинального Java кода.
+        """
         if phase_data is None or phase_data.size == 0:
             return phase_data
             
-        rows, cols = phase_data.shape
+        # Работаем с копией данных
         result = phase_data.copy()
+        rows, cols = result.shape
 
-        # 1. Удаляем тренд по строкам (axis=1)
+        # 1. Горизонтальный тренд (расчет по первой строке)
+        # В Java: horizontal[x] = k[x][0] -> linReg -> вычитание из всех строк
         x = np.arange(cols)
-        # np.polyfit умеет работать с 2D массивом (y), подгоняя полиномы для каждого столбца y.
-        # Нам нужно для каждой строки, поэтому транспонируем result.T
-        # shape result.T is (cols, rows). polyfit вернет (2, rows) - slope и intercept для каждой строки
-        coeffs_rows = np.polyfit(x, result.T, 1) # (2, rows)
+        first_row = result[0, :] # Берем профиль первой строки
         
-        # coeffs_rows[0] - наклоны (rows,), coeffs_rows[1] - сдвиги (rows,)
-        # Строим тренд: slope * x + intercept. Используем broadcasting.
-        # slope[:, None] shape (rows, 1) * x shape (cols,) -> (rows, cols)
-        trend_rows = coeffs_rows[0][:, np.newaxis] * x + coeffs_rows[1][:, np.newaxis]
-        result -= trend_rows
+        # Аппроксимируем прямой линией (степень 1)
+        coeffs_h = np.polyfit(x, first_row, 1) 
+        trend_h = np.polyval(coeffs_h, x)
         
-        # 2. Удаляем тренд по столбцам (axis=0) для уже обработанных данных
+        # Вычитаем полученный тренд из всех строк изображения
+        # Использование broadcasting [None, :] применяет вектор (cols,) ко всей матрице (rows, cols)
+        result -= trend_h[np.newaxis, :]
+        
+        # 2. Вертикальный тренд (расчет по первому столбцу)
+        # В Java: vertical[y] = k[0][y] -> linReg -> вычитание из всех столбцов
         y = np.arange(rows)
-        # Теперь подгоняем по столбцам. result имеет shape (rows, cols).
-        # polyfit(y, result, 1) вернет (2, cols)
-        coeffs_cols = np.polyfit(y, result, 1) # (2, cols)
+        first_col = result[:, 0] # Берем профиль первого столбца (после удаления горизонтального тренда)
         
-        # Строим тренд по столбцам
-        # slope * y + intercept.
-        # slope shape (cols,), y shape (rows,). 
-        # slope * y[:, None] -> (cols,) * (rows, 1) -> broadcasting requires match?
-        # coeffs_cols[0] shape (cols,). y[:, np.newaxis] shape (rows, 1).
-        # result is trend + residual.
-        # trend calculation:
-        trend_cols = y[:, np.newaxis] * coeffs_cols[0] + coeffs_cols[1]
-        result -= trend_cols
+        coeffs_v = np.polyfit(y, first_col, 1)
+        trend_v = np.polyval(coeffs_v, y)
+        
+        # Вычитаем полученный тренд из всех столбцов
+        # Использование broadcasting [:, None] превращает вектор в столбец (rows, 1)
+        result -= trend_v[:, np.newaxis]
         
         return result
 
